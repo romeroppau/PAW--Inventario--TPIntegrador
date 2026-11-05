@@ -7,6 +7,11 @@
 
 $router->get('/api/inventario/insumos', [InsumoControlador::class, 'listado']);
 $router->post('/api/inventario/insumos', [InsumoControlador::class, 'crear']);
+
+// Va ANTES de las rutas con {id}: el router prueba las rutas en orden, y si /{id} estuviera
+// primero, tomaría la palabra "movimientos" como si fuera un id (y respondería 404).
+$router->get('/api/inventario/insumos/movimientos', [InsumoControlador::class, 'todosLosMovimientos']);
+
 $router->get('/api/inventario/insumos/{id}', [InsumoControlador::class, 'detalle']);
 $router->put('/api/inventario/insumos/{id}', [InsumoControlador::class, 'editar']);
 $router->delete('/api/inventario/insumos/{id}', [InsumoControlador::class, 'darDeBaja']);

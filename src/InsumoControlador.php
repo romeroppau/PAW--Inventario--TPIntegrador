@@ -171,6 +171,18 @@ class InsumoControlador
         Response::json(['datos' => $insumos->movimientos($insumo->id)]);
     }
 
+    // GET /api/inventario/insumos/movimientos?insumo=
+    // Movimientos de todos los insumos. El parámetro insumo es un filtro opcional:
+    // si no es un id válido se ignora (igual que los filtros del catálogo).
+    public static function todosLosMovimientos(): void
+    {
+        self::veterinario();
+
+        $filtro = self::id(['id' => Request::query()['insumo'] ?? '']);
+
+        Response::json(['datos' => self::repositorio()->movimientos($filtro)]);
+    }
+
     // ---------- Ayudas ----------
 
     // Exige sesión de veterinario (401 o 403 si no) y, para POST, PUT y DELETE, el token CSRF (403).

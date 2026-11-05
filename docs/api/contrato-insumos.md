@@ -15,6 +15,7 @@ Los productos de la tienda tienen su propio contrato: [contrato.md](contrato.md)
 | `DELETE /api/inventario/insumos/{id}` | Veterinario | Dar de baja un insumo (baja lógica) |
 | `POST /api/inventario/insumos/{id}/stock` | Veterinario | Cargar stock. Registra un movimiento de entrada |
 | `POST /api/inventario/insumos/{id}/retiro` | Veterinario | Retirar unidades sin una consulta. Registra un movimiento de salida |
+| `GET /api/inventario/insumos/movimientos` | Veterinario | Movimientos de todos los insumos, con filtro opcional por insumo |
 | `GET /api/inventario/insumos/{id}/movimientos` | Veterinario | Historial de movimientos de un insumo |
 
 Los insumos **no** tienen rutas en `/api/tienda/`: el cliente nunca los ve.
@@ -238,9 +239,25 @@ Resta unidades del stock sin que haya una consulta (por ejemplo, el veterinario 
 
 ---
 
+## GET /api/inventario/insumos/movimientos
+
+Movimientos de **todos** los insumos, del más reciente al más antiguo. Lo usa la pantalla "Movimientos" del panel: al entrar muestra todos, y el selector de insumo funciona como filtro.
+
+**Parámetro (opcional):**
+
+| Parámetro | Descripción |
+|---|---|
+| `insumo` | Id de un insumo: solo trae sus movimientos. Si no es un id válido, se ignora y se traen todos. Si el insumo no existe o no tiene movimientos, `datos` llega vacío |
+
+**Ejemplos:** `GET /api/inventario/insumos/movimientos` · `GET /api/inventario/insumos/movimientos?insumo=101`
+
+**200 OK:** el mismo formato que `GET /api/inventario/insumos/{id}/movimientos` (abajo).
+
+---
+
 ## GET /api/inventario/insumos/{id}/movimientos
 
-Historial de movimientos de un insumo, del más reciente al más antiguo. Lo usa la pantalla "Movimientos" del panel.
+Historial de movimientos de un insumo, del más reciente al más antiguo.
 
 **200 OK:**
 
@@ -253,6 +270,8 @@ Historial de movimientos de un insumo, del más reciente al más antiguo. Lo usa
       "tipo": "SALIDA",
       "motivo": "CONSULTA",
       "cantidad": 2,
+      "insumo_id": 101,
+      "insumo": "Jeringa descartable 3 ml",
       "usuario": "Nombre del veterinario"
     },
     {
@@ -261,6 +280,8 @@ Historial de movimientos de un insumo, del más reciente al más antiguo. Lo usa
       "tipo": "ENTRADA",
       "motivo": "CARGA_VETERINARIO",
       "cantidad": 50,
+      "insumo_id": 101,
+      "insumo": "Jeringa descartable 3 ml",
       "usuario": "Nombre del veterinario"
     }
   ]
@@ -276,6 +297,7 @@ Historial de movimientos de un insumo, del más reciente al más antiguo. Lo usa
   | `SALIDA` | `CONSULTA` | Usado en una consulta | Al finalizar una consulta |
   | `SALIDA` | `AJUSTE` | Retiro manual (sin consulta) | Retiro manual |
 
+- `insumo_id` e `insumo`: id y nombre del insumo del movimiento (sirven en la lista de todos los insumos).
 - `usuario`: nombre de quien registró el movimiento, o `null` si no lo registró una persona.
 
 **Errores:** `404` si el insumo no existe.

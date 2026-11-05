@@ -135,19 +135,24 @@ class InsumoRepositorio
         return $insumo;
     }
 
-    // Historial de movimientos de un insumo, del más reciente al más antiguo,
-    // con el nombre de quien lo registró.
-    public function movimientos(int $insumoId): array
+    // Historial de movimientos de insumos, del más reciente al más antiguo, con el insumo y el
+    // nombre de quien lo registró. Con un id, solo los de ese insumo; con null, los de todos.
+    public function movimientos(?int $insumoId = null): array
     {
-        $consulta = $this->db->prepare(
-            "SELECT m.id, DATE_FORMAT(m.fecha, '%Y-%m-%d %H:%i:%s') AS fecha, m.tipo, m.motivo, m.cantidad,
-                    u.nombre AS usuario
-             FROM movimiento_inventario m
-             LEFT JOIN usuario u ON u.id = m.usuario_id
-             WHERE m.insumo_id = ?
-             ORDER BY m.fecha DESC, m.id DESC"
-        );
-        $consulta->execute([$insumoId]);
+        $sql = "SELECT m.id, DATE_FORMAT(m.fecha, '%Y-%m-%d %H:%i:%s') AS fecha, m.tipo, m.motivo, m.cantidad,
+                       m.insumo_id, i.nombre AS insumo, u.nombre AS usuario
+                FROM movimiento_inventario m
+                JOIN insumo i ON i.id = m.insumo_id
+                LEFT JOIN usuario u ON u.id = m.usuario_id";
+        $parametros = [];
+
+        if ($insumoId !== null) {
+            $sql .= ' WHERE m.insumo_id = ?';
+            $parametros[] = $insumoId;
+        }
+
+        $consulta = $this->db->prepare($sql . ' ORDER BY m.fecha DESC, m.id DESC');
+        $consulta->execute($parametros);
 
         return array_map(fn (array $fila) => [
             'id' => (int) $fila['id'],
@@ -155,6 +160,8 @@ class InsumoRepositorio
             'tipo' => $fila['tipo'],
             'motivo' => $fila['motivo'],
             'cantidad' => (int) $fila['cantidad'],
+            'insumo_id' => (int) $fila['insumo_id'],
+            'insumo' => $fila['insumo'],
             'usuario' => $fila['usuario'],
         ], $consulta->fetchAll());
     }
