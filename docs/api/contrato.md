@@ -1,4 +1,4 @@
-# Contrato de la API — Inventario y tienda (módulo Inventario)
+# Contrato de la API — Productos y tienda (módulo Inventario)
 
 Qué recibe y qué devuelve cada endpoint de productos y movimientos de inventario. El frontend programa contra este documento. Si un endpoint cambia, este archivo se actualiza en el mismo commit.
 
