@@ -47,6 +47,13 @@ class StockInternoControlador
                         'items' => $resultado['items'],
                     ], 409);
                     return;
+                case 'DADO_DE_BAJA':
+                    Response::json([
+                        'error' => 'Ítem dado de baja',
+                        'motivo' => 'DADO_DE_BAJA',
+                        'items' => $resultado['items'],
+                    ], 409);
+                    return;
                 case 'ITEM_INEXISTENTE':
                     Response::json([
                         'error' => 'Ítem no encontrado',

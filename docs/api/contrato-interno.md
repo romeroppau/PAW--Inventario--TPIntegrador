@@ -34,7 +34,7 @@ Los tipos tienen que ser los correctos: un número como texto (`"2"`) o un decim
 **Qué hace:** todo o nada, en una sola transacción.
 - Resta el stock de cada ítem y registra un movimiento `SALIDA` con motivo `CONSULTA` por ítem. Los movimientos de insumo llevan solo `insumo_id`; los de producto, solo `producto_id`.
 - En los insumos también actualiza el estado: si el stock llega a 0, queda `EN_FALTA`; si no, `DISPONIBLE`.
-- No filtra por `activo`: un ítem dado de baja después de cargarse en la consulta igual se descuenta. Pacientes valida `activo` al **agregar** el ítem.
+- No descuenta ítems dados de baja: si alguno se dio de baja después de cargarse en la consulta, responde `409` y no descuenta nada. Un ítem que ya se había descontado antes de la baja se saltea, como cualquier ítem ya aplicado.
 
 **Respuestas:**
 
@@ -46,6 +46,7 @@ Los tipos tienen que ser los correctos: un número como texto (`"2"`) o un decim
 | `401` | `{ "error": "No autorizado" }` | Falta el token o no coincide |
 | `404` | `{ "error": "Ítem no encontrado", "items": [ { "tipo": "INSUMO", "id": 3 } ] }` | El producto o insumo no existe. No descuenta nada |
 | `409` | `{ "error": "Stock insuficiente", "items": [ { "tipo": "INSUMO", "id": 3, "stock": 0 } ] }` | Algún ítem no alcanza. No descuenta nada. Lista todos los faltantes |
+| `409` | `{ "error": "Ítem dado de baja", "motivo": "DADO_DE_BAJA", "items": [ { "tipo": "INSUMO", "id": 3 } ] }` | Algún ítem está dado de baja. No descuenta nada. Lista todos los dados de baja |
 | `500` | `{ "error": "No se pudo procesar el descuento de stock" }` | Error inesperado, sin detalles internos |
 
 ## Reintentos
