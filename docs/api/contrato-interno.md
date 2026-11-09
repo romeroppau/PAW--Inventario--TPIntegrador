@@ -40,8 +40,8 @@ Los tipos tienen que ser los correctos: un número como texto (`"2"`) o un decim
 
 | Código | Cuerpo | Cuándo |
 |---|---|---|
-| `200` | `{ "aplicado": true }` | Todo descontado |
-| `200` | `{ "aplicado": false }` | Ya se había aplicado (`id_operacion` repetido). No descuenta de nuevo |
+| `200` | `{ "aplicado": true }` | Se descontó al menos un ítem. Los ítems cuyo `id_operacion` ya estaba aplicado se saltean; los nuevos se descuentan |
+| `200` | `{ "aplicado": false }` | **Todos** los ítems del pedido ya estaban aplicados. No se descuenta nada |
 | `400` | `{ "error": "Datos de solicitud inválidos" }` | Cuerpo mal formado |
 | `401` | `{ "error": "No autorizado" }` | Falta el token o no coincide |
 | `404` | `{ "error": "Ítem no encontrado", "items": [ { "tipo": "INSUMO", "id": 3 } ] }` | El producto o insumo no existe. No descuenta nada |
@@ -51,3 +51,11 @@ Los tipos tienen que ser los correctos: un número como texto (`"2"`) o un decim
 ## Reintentos
 
 `id_operacion` identifica a cada ítem. Pacientes lo arma siempre igual a partir de la consulta y el ítem, así que un doble clic o un reintento tras un fallo manda los mismos valores y no descuenta dos veces. Reintentar es seguro.
+
+La idempotencia es **por ítem**, no por pedido. `id_operacion` identifica a cada ítem:
+
+- Si el pedido trae ítems ya aplicados y otros nuevos, se saltean los viejos y se descuentan solo los nuevos (`aplicado: true`).
+- Si todos ya estaban aplicados, no se descuenta nada (`aplicado: false`).
+- Si un ítem nuevo no tiene stock, responde `409` y **no se descuenta ninguno de los nuevos**. Los que ya estaban aplicados de antes no se tocan.
+
+Para que esto funcione, Pacientes tiene que armar el `id_operacion` **estable por ítem** (a partir de la consulta y el ítem, no de un contador ni de la hora). Así un reintento, o un reintento con ítems agregados, no descuenta dos veces lo mismo.

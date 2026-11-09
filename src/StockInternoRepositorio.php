@@ -4,7 +4,9 @@ class StockInternoRepositorio
 {
     private const TABLAS = ['PRODUCTO' => 'producto', 'INSUMO' => 'insumo'];
 
-    public function __construct(private PDO $db) {}
+    public function __construct(private PDO $db)
+    {
+    }
 
     /**
      * @param array<int, array{tipo:string,id:int,cantidad:int,id_operacion:string}> $items
@@ -13,16 +15,26 @@ class StockInternoRepositorio
      */
     public function descontar(int $usuarioId, array $items): array
     {
-        // Orden fijo: dos lotes simultáneos bloquean filas en el mismo orden (evita deadlocks)
         usort($items, fn($a, $b) => [$a['tipo'], $a['id']] <=> [$b['tipo'], $b['id']]);
 
         $this->db->beginTransaction();
         try {
             $faltantes = [];
+            $aplicados = 0;
 
             foreach ($items as $item) {
-                // El INSERT va primero: si el id_operacion existe, salta 1062 y no se toca el stock
-                $this->insertarMovimiento($usuarioId, $item);
+                // INSERT IGNORE no sirve: ocultaría otros errores. Usamos try/catch por ítem
+                // con un SAVEPOINT para no abortar la transacción entera.
+                $this->db->exec('SAVEPOINT item');
+                try {
+                    $this->insertarMovimiento($usuarioId, $item);
+                } catch (PDOException $e) {
+                    if ((int) ($e->errorInfo[1] ?? 0) === 1062) {
+                        $this->db->exec('ROLLBACK TO SAVEPOINT item');
+                        continue;   // este ítem ya se aplicó: se saltea
+                    }
+                    throw $e;
+                }
 
                 if (!$this->descontarItem($item)) {
                     $stock = $this->stockActual($item);
@@ -30,29 +42,29 @@ class StockInternoRepositorio
                         $this->db->rollBack();
                         return [
                             'resultado' => 'ITEM_INEXISTENTE',
-                            'items' => [['tipo' => $item['tipo'], 'id' => $item['id']]],
+                            'items' => [['tipo' => $item['tipo'], 'id' => $item['id']]]
                         ];
                     }
                     $faltantes[] = ['tipo' => $item['tipo'], 'id' => $item['id'], 'stock' => $stock];
+                    continue;
                 }
+                $aplicados++;
             }
 
             if ($faltantes) {
-                $this->db->rollBack();   // también deshace los movimientos ya insertados
+                $this->db->rollBack();
                 return ['resultado' => 'STOCK_INSUFICIENTE', 'items' => $faltantes];
             }
 
             $this->db->commit();
-            return ['resultado' => 'APLICADO'];
+            // aplicado:false solo si TODOS los ítems ya estaban aplicados
+            return ['resultado' => $aplicados > 0 ? 'APLICADO' : 'DUPLICADA'];
 
         } catch (PDOException $e) {
             if ($this->db->inTransaction()) {
                 $this->db->rollBack();
             }
-            if ((int) ($e->errorInfo[1] ?? 0) === 1062) {
-                return ['resultado' => 'DUPLICADA'];
-            }
-            throw $e;   // el controlador responde 500 genérico, sin detalles
+            throw $e;
         }
     }
 
