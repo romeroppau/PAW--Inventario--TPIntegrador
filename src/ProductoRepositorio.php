@@ -183,6 +183,13 @@ class ProductoRepositorio
         $consulta->execute();
     }
 
+    // Reactivar: deshace la baja lógica.
+    public function reactivar(int $id): void
+    {
+        $consulta = $this->db->prepare('UPDATE producto SET activo = 1 WHERE id = ?');
+        $consulta->execute([$id]);
+    }
+
     // Baja lógica: el producto queda inactivo y conserva su historial. Nunca se borra la fila.
     public function darDeBaja(int $id): void
     {

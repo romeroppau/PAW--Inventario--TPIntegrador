@@ -94,6 +94,36 @@ class InsumoControlador
         http_response_code(204);
     }
 
+    // POST /api/inventario/insumos/{id}/reactivar
+    // Deshace la baja. Si ya estaba activo no cambia nada (se puede repetir sin problema).
+    public static function reactivar(array $parametros): void
+    {
+        self::veterinario(true);
+
+        $insumos = self::repositorio();
+
+        $insumo = self::buscar($insumos, $parametros);
+        if ($insumo === null) {
+            return;
+        }
+
+        $insumos->reactivar($insumo->id);
+
+        Response::json($insumos->buscarPorId($insumo->id)->aJson());
+    }
+
+    // POST /api/inventario/insumos/{id}/pedido     marca "Ya pedido" al proveedor
+    // DELETE /api/inventario/insumos/{id}/pedido   lo desmarca (por si se marcó por error)
+    public static function marcarPedido(array $parametros): void
+    {
+        self::cambiarPedido($parametros, true);
+    }
+
+    public static function desmarcarPedido(array $parametros): void
+    {
+        self::cambiarPedido($parametros, false);
+    }
+
     // POST /api/inventario/insumos/{id}/stock
     public static function cargarStock(array $parametros): void
     {
@@ -184,6 +214,33 @@ class InsumoControlador
     }
 
     // ---------- Ayudas ----------
+
+    private static function cambiarPedido(array $parametros, bool $pedido): void
+    {
+        self::veterinario(true);
+
+        $insumos = self::repositorio();
+
+        $insumo = self::buscar($insumos, $parametros);
+        if ($insumo === null) {
+            return;
+        }
+
+        $actualizado = $insumos->marcarPedido($insumo->id, $pedido);
+
+        if ($actualizado === null) {
+            Response::json(['error' => self::DADO_DE_BAJA], 409);
+            return;
+        }
+
+        // Solo se marca un insumo con stock bajo: con stock suficiente no hay nada que pedir.
+        if ($pedido && !$actualizado->pedido) {
+            Response::json(['error' => 'Solo se marca como pedido un insumo con stock bajo (10 o menos)'], 409);
+            return;
+        }
+
+        Response::json(self::stock($actualizado));
+    }
 
     // Exige sesión de veterinario (401 o 403 si no) y, para POST, PUT y DELETE, el token CSRF (403).
     // Auth (de comun/) ya responde y corta si algo falla. Devuelve los datos del JWT (id, rol, csrf).
