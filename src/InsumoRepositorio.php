@@ -9,7 +9,7 @@
 //   la tabla directo, vea el estado correcto.
 class InsumoRepositorio
 {
-    private const COLUMNAS = 'id, nombre, stock, costo, activo';
+    private const COLUMNAS = 'id, nombre, stock, costo, estado, activo';
 
     // Recibe la conexión de afuera, así las pruebas pueden usar otra base.
     // Hora de Argentina (-03:00) para las fechas de los movimientos, igual que en productos.
@@ -83,6 +83,41 @@ class InsumoRepositorio
     {
         $consulta = $this->db->prepare('UPDATE insumo SET activo = 0 WHERE id = ?');
         $consulta->execute([$id]);
+    }
+
+    // Reactivar: deshace la baja lógica. El insumo vuelve con el stock y el historial que tenía.
+    public function reactivar(int $id): void
+    {
+        $consulta = $this->db->prepare('UPDATE insumo SET activo = 1 WHERE id = ?');
+        $consulta->execute([$id]);
+    }
+
+    // Marca ($pedido = true) o desmarca "Ya pedido". Devuelve el insumo como quedó, o null si no
+    // existe o está dado de baja. Si se pide marcar y no tiene stock bajo, vuelve sin cambios.
+    public function marcarPedido(int $id, bool $pedido): ?Insumo
+    {
+        $this->db->beginTransaction();
+        try {
+            $insumo = $this->bloquear($id);
+            if ($insumo === null || !$insumo->activo) {
+                $this->db->rollBack();
+                return null;
+            }
+
+            if ($pedido) {
+                $insumo->marcarPedido();
+            } else {
+                $insumo->pedido = false;
+            }
+            $this->guardarStock($insumo);
+
+            $this->db->commit();
+        } catch (Throwable $error) {
+            $this->db->rollBack();
+            throw $error;
+        }
+
+        return $insumo;
     }
 
     // Carga de stock (UML: reponer). Suma, recalcula el estado y registra la ENTRADA.

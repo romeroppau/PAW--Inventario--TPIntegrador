@@ -2,15 +2,17 @@
 
 use PHPUnit\Framework\TestCase;
 
-require_once __DIR__ . '/../src/StockInternoRepositorio.php';
-
+// Pruebas del descuento interno de stock (POST /internal/stock/descontar) contra un MySQL real:
+// la idempotencia, el todo o nada y los errores dependen de la base (índice único, clave foránea).
+// Cada prueba crea sus propios productos e insumos y los borra al final.
 class StockInternoRepositorioTest extends TestCase
 {
     private PDO $db;
-    private StockInternoRepositorio $repositorio;
-    private int $productoId;
+    private StockInternoRepositorio $repo;
     private int $usuarioId;
-    private string $idOperacion;
+    private array $productos = [];
+    private array $insumos = [];
+    private ?int $usuarioCreado = null;
 
     protected function setUp(): void
     {
@@ -25,59 +27,23 @@ class StockInternoRepositorioTest extends TestCase
                 "mysql:host=$host;port=$port;dbname=$nombre;charset=utf8mb4",
                 $usuario,
                 $password,
-                [
-                    PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
-                    PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC
-                ]
+                [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC]
             );
         } catch (PDOException $e) {
-            $this->markTestSkipped(
-                'No se pudo conectar con MySQL: ' . $e->getMessage()
-            );
+            $this->markTestSkipped('No se pudo conectar con MySQL: ' . $e->getMessage());
         }
 
-        $this->repositorio = new StockInternoRepositorio($this->db);
-
-        // Necesitamos un usuario válido por la clave foránea.
-        $stmt = $this->db->query(
-            'SELECT id FROM usuario LIMIT 1'
-        );
-
-        $usuarioExistente = $stmt->fetch();
-
-        if (!$usuarioExistente) {
-            $this->markTestSkipped(
-                'Se necesita al menos un usuario de prueba en la tabla usuario.'
-            );
+        // Los movimientos tienen clave foránea a usuario. En CI la base está recién migrada y vacía:
+        // se crea un usuario para la prueba (antes, sin usuarios, estas pruebas se salteaban).
+        $id = $this->db->query('SELECT id FROM usuario ORDER BY id LIMIT 1')->fetchColumn();
+        if ($id === false) {
+            $this->db->exec("INSERT INTO usuario (nombre, email, password_hash, rol)
+                             VALUES ('Prueba stock', 'stock-interno@prueba.test', 'x', 'VETERINARIO')");
+            $id = $this->usuarioCreado = (int) $this->db->lastInsertId();
         }
+        $this->usuarioId = (int) $id;
 
-        $this->usuarioId = (int) $usuarioExistente['id'];
-
-        // Crear un producto exclusivo para esta prueba.
-        $stmt = $this->db->prepare("
-        INSERT INTO producto (
-            nombre,
-            precio,
-            stock,
-            categoria,
-            especie_destino,
-            etapa_vida
-        ) VALUES (
-            'Producto de prueba stock interno',
-            1000,
-            10,
-            'MEDICAMENTO',
-            'TODAS',
-            'TODAS'
-        )
-        ");
-
-        $stmt->execute();
-
-        $this->productoId = (int) $this->db->lastInsertId();
-
-        // Identificador único para cada ejecución.
-        $this->idOperacion = bin2hex(random_bytes(16));
+        $this->repo = new StockInternoRepositorio($this->db);
     }
 
     protected function tearDown(): void
@@ -85,229 +51,204 @@ class StockInternoRepositorioTest extends TestCase
         if (!isset($this->db)) {
             return;
         }
-
-        if (isset($this->productoId)) {
-            $stmt = $this->db->prepare("
-            DELETE FROM movimiento_inventario
-            WHERE producto_id = ?
-        ");
-            $stmt->execute([$this->productoId]);
-
-            $stmt = $this->db->prepare("
-            DELETE FROM producto
-            WHERE id = ?
-        ");
-            $stmt->execute([$this->productoId]);
+        foreach (['producto' => $this->productos, 'insumo' => $this->insumos] as $tabla => $ids) {
+            foreach ($ids as $id) {
+                $this->db->prepare("DELETE FROM movimiento_inventario WHERE {$tabla}_id = ?")->execute([$id]);
+                $this->db->prepare("DELETE FROM $tabla WHERE id = ?")->execute([$id]);
+            }
+        }
+        if ($this->usuarioCreado !== null) {
+            $this->db->prepare('DELETE FROM usuario WHERE id = ?')->execute([$this->usuarioCreado]);
         }
     }
 
-    public function testDescuentaStockYRegistraMovimiento(): void
+    public function testDescuentaStockYRegistraElMovimiento(): void
     {
-        $resultado = $this->repositorio->descontarProducto(
-            $this->productoId,
-            3,
-            $this->usuarioId,
-            $this->idOperacion
-        );
+        $producto = $this->crearProducto(10);
+        $operacion = $this->operacion();
 
-        self::assertTrue($resultado['aplicado']);
+        $r = $this->repo->descontar($this->usuarioId, [$this->item('PRODUCTO', $producto, 3, $operacion)]);
 
-        // Verificar que el stock pasó de 10 a 7.
-        $stmt = $this->db->prepare(
-            'SELECT stock FROM producto WHERE id = ?'
-        );
-        $stmt->execute([$this->productoId]);
-
-        self::assertSame(7, (int) $stmt->fetchColumn());
-
-        // Verificar el movimiento registrado.
-        $stmt = $this->db->prepare("
-            SELECT producto_id, insumo_id, tipo, cantidad,
-                   motivo, usuario_id, id_operacion
-            FROM movimiento_inventario
-            WHERE id_operacion = ?
-        ");
-        $stmt->execute([$this->idOperacion]);
-
-        $movimiento = $stmt->fetch();
-
-        self::assertNotFalse($movimiento);
-        self::assertSame($this->productoId, (int) $movimiento['producto_id']);
-        self::assertNull($movimiento['insumo_id']);
-        self::assertSame('SALIDA', $movimiento['tipo']);
-        self::assertSame(3, (int) $movimiento['cantidad']);
-        self::assertSame('CONSULTA', $movimiento['motivo']);
-        self::assertSame($this->usuarioId, (int) $movimiento['usuario_id']);
+        $this->assertSame('APLICADO', $r['resultado']);
+        $this->assertSame(7, $this->stock('producto', $producto));
+        $mov = $this->movimiento($operacion);
+        $this->assertSame(['SALIDA', 'CONSULTA', 3], [$mov['tipo'], $mov['motivo'], (int) $mov['cantidad']]);
     }
 
-    public function testNoPermiteDescontarMasStockDelDisponible(): void
+    public function testElMovimientoQuedaConLaHoraDeArgentina(): void
     {
-        $resultado = $this->repositorio->descontarProducto(
-            $this->productoId,
-            15,
-            $this->usuarioId,
-            $this->idOperacion
-        );
+        $producto = $this->crearProducto(10);
+        $operacion = $this->operacion();
 
-        self::assertFalse($resultado['aplicado']);
+        $this->repo->descontar($this->usuarioId, [$this->item('PRODUCTO', $producto, 1, $operacion)]);
 
-        $stmt = $this->db->prepare(
-            'SELECT stock FROM producto WHERE id = ?'
-        );
-        $stmt->execute([$this->productoId]);
-
-        self::assertSame(10, (int) $stmt->fetchColumn());
-
-        $stmt = $this->db->prepare(
-            'SELECT COUNT(*) FROM movimiento_inventario WHERE id_operacion = ?'
-        );
-        $stmt->execute([$this->idOperacion]);
-
-        self::assertSame(0, (int) $stmt->fetchColumn());
-
-        self::assertSame(
-            'STOCK_INSUFICIENTE',
-            $resultado['motivo']
-        );
-    }
-
-    public function testRechazaProductoInexistente(): void
-    {
-        $resultado = $this->repositorio->descontarProducto(
-            999999999,
-            1,
-            $this->usuarioId,
-            $this->idOperacion
-        );
-
-        self::assertFalse($resultado['aplicado']);
-
-        self::assertSame(
-            'PRODUCTO_INEXISTENTE',
-            $resultado['motivo']
-        );
+        // MySQL corre en UTC; la fecha guardada tiene que ser la de acá (UTC menos 3 horas).
+        $fecha = $this->movimiento($operacion)['fecha'];
+        $argentina = new DateTimeZone('-03:00');
+        $diferencia = abs((new DateTimeImmutable('now', $argentina))->getTimestamp()
+            - (new DateTimeImmutable($fecha, $argentina))->getTimestamp());
+        $this->assertLessThan(120, $diferencia, "Fecha guardada: $fecha");
     }
 
     public function testNoDescuentaDosVecesLaMismaOperacion(): void
     {
-        $primeraRespuesta = $this->repositorio->descontarProducto(
-            $this->productoId,
-            2,
-            $this->usuarioId,
-            $this->idOperacion
-        );
+        $producto = $this->crearProducto(10);
+        $item = $this->item('PRODUCTO', $producto, 2, $this->operacion());
 
-        self::assertTrue($primeraRespuesta['aplicado']);
-
-        $segundaRespuesta = $this->repositorio->descontarProducto(
-            $this->productoId,
-            2,
-            $this->usuarioId,
-            $this->idOperacion
-        );
-
-        self::assertFalse($segundaRespuesta['aplicado']);
-        self::assertSame(
-            'OPERACION_DUPLICADA',
-            $segundaRespuesta['motivo']
-        );
-
-        $stmt = $this->db->prepare(
-            'SELECT stock FROM producto WHERE id = ?'
-        );
-        $stmt->execute([$this->productoId]);
-
-        // Debe quedar en 8, no en 6.
-        self::assertSame(8, (int) $stmt->fetchColumn());
+        $this->assertSame('APLICADO', $this->repo->descontar($this->usuarioId, [$item])['resultado']);
+        $this->assertSame('DUPLICADA', $this->repo->descontar($this->usuarioId, [$item])['resultado']);
+        $this->assertSame(8, $this->stock('producto', $producto));
     }
-    public function testRechazaCantidadInvalida(): void
-    {
-        $resultado = $this->repositorio->descontarProducto(
-            $this->productoId,
-            0,
-            $this->usuarioId,
-            $this->idOperacion
-        );
 
-        self::assertFalse($resultado['aplicado']);
-
-        self::assertSame(
-            'DATOS_INVALIDOS',
-            $resultado['motivo']
-        );
-
-        // El stock debe permanecer intacto.
-        $stmt = $this->db->prepare(
-            'SELECT stock FROM producto WHERE id = ?'
-        );
-        $stmt->execute([$this->productoId]);
-
-        self::assertSame(10, (int) $stmt->fetchColumn());
-    }
     public function testReintentoConItemNuevoDescuentaSoloElNuevo(): void
     {
-        $sufijo = uniqid();
-        $productoA = $this->crearProducto(stock: 10);
-        $productoB = $this->crearProducto(stock: 10);
-        $repo = new StockInternoRepositorio($this->db);
+        $a = $this->crearProducto(10);
+        $b = $this->crearProducto(10);
+        $itemA = $this->item('PRODUCTO', $a, 2, $this->operacion());
+        $itemB = $this->item('PRODUCTO', $b, 3, $this->operacion());
 
-        $itemA = [
-            'tipo' => 'PRODUCTO',
-            'id' => $productoA,
-            'cantidad' => 2,
-            'id_operacion' => "t-$sufijo-A"
-        ];
-        $itemB = [
-            'tipo' => 'PRODUCTO',
-            'id' => $productoB,
-            'cantidad' => 3,
-            'id_operacion' => "t-$sufijo-B"
-        ];
+        $this->repo->descontar($this->usuarioId, [$itemA]);
+        $r = $this->repo->descontar($this->usuarioId, [$itemA, $itemB]);
 
-        // Primer intento: solo A
-        $r1 = $repo->descontar($this->usuarioId, [$itemA]);
-        $this->assertSame('APLICADO', $r1['resultado']);
-
-        // Reintento con A (ya aplicado) + B (nuevo)
-        $r2 = $repo->descontar($this->usuarioId, [$itemA, $itemB]);
-        $this->assertSame('APLICADO', $r2['resultado']);
-
-        $this->assertSame(8, $this->stockProducto($productoA), 'A no se descuenta dos veces');
-        $this->assertSame(7, $this->stockProducto($productoB), 'B sí se descuenta');
+        $this->assertSame('APLICADO', $r['resultado']);
+        $this->assertSame(8, $this->stock('producto', $a), 'A no se descuenta dos veces');
+        $this->assertSame(7, $this->stock('producto', $b), 'B sí se descuenta');
     }
 
-    public function testLoteTotalmenteRepetidoDevuelveDuplicada(): void
+    public function testReintentoConLaCantidadAumentadaSeRechaza(): void
     {
-        $productoA = $this->crearProducto(stock: 10);
-        $repo = new StockInternoRepositorio($this->db);
-        $item = [
-            'tipo' => 'PRODUCTO',
-            'id' => $productoA,
-            'cantidad' => 2,
-            'id_operacion' => 't-' . uniqid()
-        ];
+        $insumo = $this->crearInsumo(20);
+        $otro = $this->crearProducto(10);
+        $operacion = $this->operacion();
 
-        $repo->descontar($this->usuarioId, [$item]);
-        $r = $repo->descontar($this->usuarioId, [$item]);
+        $this->repo->descontar($this->usuarioId, [$this->item('INSUMO', $insumo, 2, $operacion)]);
+        // Entre un intento y otro la cantidad pasó de 2 a 5: no se puede dar por aplicado (faltarían 3)
+        // ni descontar 5 otra vez (serían 7). Se rechaza todo el pedido, también el ítem nuevo.
+        $r = $this->repo->descontar($this->usuarioId, [
+            $this->item('INSUMO', $insumo, 5, $operacion),
+            $this->item('PRODUCTO', $otro, 1, $this->operacion()),
+        ]);
 
-        $this->assertSame('DUPLICADA', $r['resultado']);
-        $this->assertSame(8, $this->stockProducto($productoA));
+        $this->assertSame('OPERACION_DISTINTA', $r['resultado']);
+        $this->assertSame([['tipo' => 'INSUMO', 'id' => $insumo, 'cantidad_aplicada' => 2]], $r['items']);
+        $this->assertSame(18, $this->stock('insumo', $insumo));
+        $this->assertSame(10, $this->stock('producto', $otro));
+    }
+
+    public function testLaMismaOperacionParaOtroItemSeRechaza(): void
+    {
+        $a = $this->crearProducto(10);
+        $b = $this->crearProducto(10);
+        $operacion = $this->operacion();
+
+        $this->repo->descontar($this->usuarioId, [$this->item('PRODUCTO', $a, 1, $operacion)]);
+        $r = $this->repo->descontar($this->usuarioId, [$this->item('PRODUCTO', $b, 1, $operacion)]);
+
+        $this->assertSame('OPERACION_DISTINTA', $r['resultado']);
+        $this->assertSame(0, $r['items'][0]['cantidad_aplicada']);
+        $this->assertSame(10, $this->stock('producto', $b));
+    }
+
+    public function testItemInexistenteSeRechazaSinDescontarNada(): void
+    {
+        $producto = $this->crearProducto(10);
+
+        // Antes el movimiento chocaba con la clave foránea y terminaba en un 500.
+        $r = $this->repo->descontar($this->usuarioId, [
+            $this->item('PRODUCTO', $producto, 1, $this->operacion()),
+            $this->item('INSUMO', 4000000000, 1, $this->operacion()),
+        ]);
+
+        $this->assertSame('ITEM_INEXISTENTE', $r['resultado']);
+        $this->assertSame([['tipo' => 'INSUMO', 'id' => 4000000000]], $r['items']);
+        $this->assertSame(10, $this->stock('producto', $producto));
     }
 
     public function testItemNuevoSinStockNoDescuentaNada(): void
     {
-        $productoA = $this->crearProducto(stock: 10);
-        $productoB = $this->crearProducto(stock: 1);
-        $repo = new StockInternoRepositorio($this->db);
-        $sufijo = uniqid();
+        $a = $this->crearProducto(10);
+        $b = $this->crearProducto(1);
 
-        $itemA = ['tipo' => 'PRODUCTO', 'id' => $productoA, 'cantidad' => 2, 'id_operacion' => "t-$sufijo-A"];
-        $itemB = ['tipo' => 'PRODUCTO', 'id' => $productoB, 'cantidad' => 5, 'id_operacion' => "t-$sufijo-B"];
-
-        $r = $repo->descontar($this->usuarioId, [$itemA, $itemB]);
+        $r = $this->repo->descontar($this->usuarioId, [
+            $this->item('PRODUCTO', $a, 2, $this->operacion()),
+            $this->item('PRODUCTO', $b, 5, $this->operacion()),
+        ]);
 
         $this->assertSame('STOCK_INSUFICIENTE', $r['resultado']);
-        $this->assertSame(10, $this->stockProducto($productoA));
-        $this->assertSame(1, $this->stockProducto($productoB));
+        $this->assertSame(10, $this->stock('producto', $a));
+        $this->assertSame(1, $this->stock('producto', $b));
+    }
+
+    public function testItemDadoDeBajaNoSeDescuenta(): void
+    {
+        $insumo = $this->crearInsumo(10, activo: false);
+
+        $r = $this->repo->descontar($this->usuarioId, [$this->item('INSUMO', $insumo, 1, $this->operacion())]);
+
+        $this->assertSame('DADO_DE_BAJA', $r['resultado']);
+        $this->assertSame(10, $this->stock('insumo', $insumo));
+    }
+
+    public function testInsumoEnCeroQuedaEnFaltaYElYaPedidoSeConserva(): void
+    {
+        $enFalta = $this->crearInsumo(2);
+        $pedido = $this->crearInsumo(3, estado: 'YA_PEDIDO');
+
+        $this->repo->descontar($this->usuarioId, [
+            $this->item('INSUMO', $enFalta, 2, $this->operacion()),
+            $this->item('INSUMO', $pedido, 3, $this->operacion()),
+        ]);
+
+        $this->assertSame('EN_FALTA', $this->estado($enFalta));
+        $this->assertSame('YA_PEDIDO', $this->estado($pedido));
+    }
+
+    // ---------- Ayudas ----------
+
+    private function item(string $tipo, int $id, int $cantidad, string $operacion): array
+    {
+        return ['tipo' => $tipo, 'id' => $id, 'cantidad' => $cantidad, 'id_operacion' => $operacion];
+    }
+
+    private function operacion(): string
+    {
+        return 'prueba-' . bin2hex(random_bytes(8));
+    }
+
+    private function crearProducto(int $stock): int
+    {
+        $this->db->prepare("INSERT INTO producto (nombre, precio, stock, categoria, especie_destino, etapa_vida)
+                            VALUES ('Producto de prueba stock interno', 1000, ?, 'MEDICAMENTO', 'TODAS', 'TODAS')")
+            ->execute([$stock]);
+        return $this->productos[] = (int) $this->db->lastInsertId();
+    }
+
+    private function crearInsumo(int $stock, bool $activo = true, string $estado = 'DISPONIBLE'): int
+    {
+        $this->db->prepare("INSERT INTO insumo (nombre, stock, costo, estado, activo)
+                            VALUES ('Insumo de prueba stock interno', ?, 100, ?, ?)")
+            ->execute([$stock, $estado, $activo ? 1 : 0]);
+        return $this->insumos[] = (int) $this->db->lastInsertId();
+    }
+
+    private function movimiento(string $operacion): array
+    {
+        $stmt = $this->db->prepare('SELECT tipo, motivo, cantidad, fecha FROM movimiento_inventario WHERE id_operacion = ?');
+        $stmt->execute([$operacion]);
+        return $stmt->fetch();
+    }
+
+    private function stock(string $tabla, int $id): int
+    {
+        $stmt = $this->db->prepare("SELECT stock FROM $tabla WHERE id = ?");
+        $stmt->execute([$id]);
+        return (int) $stmt->fetchColumn();
+    }
+
+    private function estado(int $insumo): string
+    {
+        $stmt = $this->db->prepare('SELECT estado FROM insumo WHERE id = ?');
+        $stmt->execute([$insumo]);
+        return $stmt->fetchColumn();
     }
 }

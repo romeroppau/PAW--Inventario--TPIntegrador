@@ -15,6 +15,7 @@ Las reglas generales que valen para todos los módulos (formato JSON, formato de
 | `POST /api/inventario/productos` | Veterinario | Crear un producto |
 | `PUT /api/inventario/productos/{id}` | Veterinario | Editar un producto (no cambia el stock) |
 | `DELETE /api/inventario/productos/{id}` | Veterinario | Dar de baja un producto (baja lógica) |
+| `POST /api/inventario/productos/{id}/reactivar` | Veterinario | Deshacer la baja |
 | `POST /api/inventario/productos/{id}/stock` | Veterinario | Cargar stock. Registra un movimiento de entrada |
 | `GET /api/inventario/productos/{id}/movimientos` | Veterinario | Historial de movimientos de un producto |
 | `GET /api/inventario/salud` | Público | Indica si el módulo funciona y llega a la base |
@@ -277,6 +278,14 @@ Baja lógica: el producto queda con `activo: false`, desaparece del catálogo p�
 **204 No Content**, sin cuerpo. Dar de baja un producto que ya estaba dado de baja también responde `204`.
 
 **Errores:** `404` si no existe.
+
+---
+
+## POST /api/inventario/productos/{id}/reactivar
+
+Deshace la baja: el producto vuelve con `activo: true`, con su stock y su historial, y reaparece en el catálogo (si no está vencido). Reactivar un producto activo no cambia nada.
+
+**200 OK** con el producto completo (como en `GET /api/inventario/productos/{id}`). **Errores:** `404` si no existe.
 
 ---
 
