@@ -95,6 +95,7 @@ jobs:
           BACKEND_DB_PASSWORD: pruebas
           INVENTARIO_DB_PASSWORD: pruebas
           PACIENTES_DB_PASSWORD: pruebas
+          ADOPCIONES_DB_PASSWORD: pruebas
         run: |
           php gateway/base/migrar.php
 
