@@ -1,7 +1,7 @@
 <?php
 
 // Los endpoints de las compras de la tienda (contrato en docs/api/contrato-tienda.md):
-// confirmar el carrito, mis compras, una compra y el arrepentimiento antes de pagar.
+// confirmar el carrito, mis compras, una compra y cancelarla (antes de pagar o ya pagada).
 // Los usa el comprador (CLIENTE o RESCATISTA), salvo los pedidos para retirar y "entregada", que
 // son de la veterinaria. El usuario sale siempre del JWT.
 class CompraControlador
@@ -55,24 +55,34 @@ class CompraControlador
         Response::json($compra);
     }
 
-    // POST /api/tienda/compras/{numero}/cancelar   (arrepentimiento antes de pagar)
+    // POST /api/tienda/compras/{numero}/cancelar
+    // El comprador cancela su compra: antes de pagar o ya pagada (mientras está para retirar).
+    // Si estaba pagada, el importe no se reintegra y se le manda un aviso.
     public static function cancelar(array $parametros): void
     {
         $comprador = self::comprador(true);
         $compras = self::repositorio();
         $numero = (string) ($parametros['numero'] ?? '');
 
-        $resultado = $compras->cancelarSinPagar($numero, (int) $comprador['id']);
+        $resultado = $compras->cancelarPorComprador($numero, (int) $comprador['id']);
 
         if ($resultado === 'no_existe') {
             Response::json(['error' => self::NO_ENCONTRADA], 404);
-        } elseif ($resultado === 'pagada') {
-            Response::json(['error' => 'La compra ya está pagada: no se puede cancelar'], 409);
-        } elseif ($resultado === 'cancelada') {
-            Response::json(['error' => 'La compra ya está cancelada'], 409);
-        } else {
-            Response::json($compras->detalle($numero));
+            return;
         }
+        if ($resultado === 'entregada') {
+            Response::json(['error' => 'La compra ya se entregó: no se puede cancelar'], 409);
+            return;
+        }
+        if ($resultado === 'cancelada') {
+            Response::json(['error' => 'La compra ya está cancelada'], 409);
+            return;
+        }
+        if ($resultado === 'pagada') {
+            (new Vencimientos($compras))->avisarCancelacionPorComprador($numero, new DateTimeImmutable());
+        }
+
+        Response::json($compras->detalle($numero));
     }
 
     // GET /api/inventario/compras?estado=PAGADA&buscar=101   (veterinaria: pedidos para retirar)

@@ -12,6 +12,7 @@ Toca "Ir a pagar" (confirmar)                                        → factura
   ├─ se arrepiente antes de pagar (o no paga en 15 minutos)          → factura CANCELADA y el stock vuelve
   └─ paga con Mercado Pago                                           → factura PAGADA: 5 días hábiles para retirar
        ├─ la retira en el local y la veterinaria lo constata         → factura ENTREGADA
+       ├─ la cancela él mismo antes de retirarla                     → factura CANCELADA, sin devolución, y el stock vuelve
        └─ no la retira en 5 días hábiles                             → factura CANCELADA, sin devolución, y el stock vuelve
 ```
 
@@ -26,7 +27,7 @@ Toca "Ir a pagar" (confirmar)                                        → factura
 | `POST /api/tienda/carrito/confirmar` | Comprador | Confirmar la compra: crea la factura y reserva el stock |
 | `GET /api/tienda/compras` | Comprador | Mis compras |
 | `GET /api/tienda/compras/{numero}` | Comprador | Una compra, con su detalle |
-| `POST /api/tienda/compras/{numero}/cancelar` | Comprador | Arrepentirse antes de pagar |
+| `POST /api/tienda/compras/{numero}/cancelar` | Comprador | Cancelar la compra (antes de pagar o ya pagada, mientras está para retirar) |
 | `POST /api/tienda/compras/{numero}/pago` | Comprador | Pagar con Mercado Pago *(etapa 3)* |
 | `POST /api/tienda/pagos/aviso` | Mercado Pago | Aviso de pago *(etapa 3)* |
 | `GET /api/inventario/compras` | Veterinario | Pedidos para retirar, entregados y cancelados, con buscador |
@@ -69,9 +70,9 @@ El precio de cada producto se copia **al agregarlo al carrito** (`precio_unitari
 
 Por ejemplo, una compra confirmada el miércoles 18/11 se puede retirar hasta el miércoles 25/11 inclusive.
 
-**Política de cancelación** (se muestra al confirmar la compra y en el primer recordatorio): *tenés 5 días hábiles desde la compra para retirar tu pedido en el local. Si no lo retirás en ese plazo, el pedido se cancela y el importe no se reintegra.*
+**Política de cancelación** (se muestra al confirmar la compra y en el primer recordatorio): *tenés 5 días hábiles desde la compra para retirar tu pedido en el local. Si no lo retirás en ese plazo, el pedido se cancela y el importe no se reintegra. Si cancelás un pedido ya pagado, el importe tampoco se reintegra.*
 
-No hay devoluciones: una compra pagada solo termina entregada o vencida. La veterinaria no cancela compras.
+No hay devoluciones: una compra pagada termina entregada, cancelada por el comprador o vencida, y en ningún caso se devuelve el importe. El comprador puede cancelarla mientras está para retirar (hasta que se entrega o vence el plazo); el stock vuelve enseguida. La veterinaria no cancela compras.
 
 ### Estados
 
@@ -80,7 +81,7 @@ No hay devoluciones: una compra pagada solo termina entregada o vencida. La vete
 | `PENDIENTE_PAGO` | `CONFIRMADO` | Se confirmó y todavía no se pagó |
 | `PAGADA` | `PAGADO` | Mercado Pago aprobó el pago |
 | `ENTREGADA` | `RETIRADO` | La veterinaria constató el retiro |
-| `CANCELADA` | `CANCELADO` | Arrepentimiento, falta de pago o vencimiento del plazo de retiro |
+| `CANCELADA` | `CANCELADO` | La canceló el comprador, no se pagó en 15 minutos o venció el plazo de retiro (ver `motivo_cancelacion`) |
 
 Texto sugerido para el frontend: `PENDIENTE_PAGO` → "Esperando el pago", `PAGADA` → "Lista para retirar", `ENTREGADA` → "Entregada", `CANCELADA` → "Cancelada".
 
@@ -241,6 +242,7 @@ Mis compras, de la más nueva a la más vieja (las canceladas también).
 ```
 
 - `pagar_antes_de`: solo en `PENDIENTE_PAGO`; en los demás estados, `null`.
+- `motivo_cancelacion`: solo en `CANCELADA` (si no, `null`): `COMPRADOR` (la canceló el comprador, antes o después de pagar), `SIN_PAGO` (no se pagó en 15 minutos) o `VENCIDA` (venció el plazo de retiro). Texto sugerido: "La canceló el comprador", "No se pagó a tiempo", "Venció el plazo de retiro".
 - `segundos_para_pagar`: solo en `PENDIENTE_PAGO` (si no, `null`): cuántos segundos faltan para que venza, contados por el servidor. La cuenta regresiva de la pantalla parte de este número, así no depende del reloj de la computadora del comprador.
 - `retirar_hasta`: en `PENDIENTE_PAGO` y `PAGADA`; en los demás estados, `null`.
 
@@ -256,14 +258,19 @@ Una compra con sus productos. Mismo formato que la respuesta de confirmar, más 
 
 ## POST /api/tienda/compras/{numero}/cancelar
 
-Arrepentimiento: el comprador cancela una compra **que todavía no pagó**. La factura pasa a `CANCELADA`, el carrito a `CANCELADO` y el stock vuelve (`ENTRADA` / `VENTA_CANCELADA`).
+El comprador cancela su compra:
+
+- **antes de pagar** (`PENDIENTE_PAGO`): arrepentimiento;
+- **ya pagada** (`PAGADA`), mientras está para retirar: el importe **no se reintegra** y se le manda el aviso "cancelada por el cliente" (ver Avisos).
+
+La factura pasa a `CANCELADA` con `motivo_cancelacion = COMPRADOR`, el carrito a `CANCELADO` y el stock vuelve (`ENTRADA` / `VENTA_CANCELADA`).
 
 **200 OK:** la compra actualizada.
 
 **Errores:**
 
 - `404` si no existe o es de otro comprador.
-- `409 { "error": "La compra ya está pagada: no se puede cancelar" }` si ya se pagó (no hay devoluciones), o `409 { "error": "La compra ya está cancelada" }`.
+- `409 { "error": "La compra ya se entregó: no se puede cancelar" }`, o `409 { "error": "La compra ya está cancelada" }` (también si venció el plazo de retiro: se cancela sola).
 
 ---
 
@@ -296,7 +303,7 @@ Los pedidos de la veterinaria, en tres pestañas: **Para retirar** (`PAGADA`), *
 - `estado` = `PAGADA` (por defecto), `ENTREGADA` o `CANCELADA`. Un valor desconocido se ignora y se usa `PAGADA`.
 - `buscar`: el buscador, dentro de la pestaña elegida. Encuentra por **número de pedido** (por los dígitos del final: `101`, `V-101` y `V-000101` encuentran `V-000101`) o por **nombre del comprador** (cualquier parte, sin importar mayúsculas). Hasta 100 caracteres.
 
-**Orden:** Para retirar, del que vence antes al que vence después. Entregados y Cancelados, los más recientes primero (son historial).
+**Orden:** Para retirar, del que vence antes al que vence después. Entregados (por fecha de entrega) y Cancelados (por fecha de cancelación), los más recientes primero (son historial). En Cancelados, cada pedido trae `motivo_cancelacion`.
 
 **200 OK:**
 
@@ -362,6 +369,7 @@ Cada aviso sale solo en su día, desde las 9:00.
 |---|---|---|
 | Día hábil 2 de una compra `PAGADA` | `compra-V-000003-dia2` | 🐾 ¡Hola, Ana! Tu pedido V-000003 ya te está esperando en HuellaVet. Podés pasar a buscarlo hasta el miércoles 25/11 inclusive. ¡Te esperamos! 🛍️ Política de cancelación: si no lo retirás en ese plazo, el pedido se cancela y el importe no se reintegra. |
 | Día hábil 4 | `compra-V-000003-dia4` | ⏰ ¡Hola, Ana! Te recordamos que mañana (25/11) es el último día para retirar tu pedido V-000003. Pasado ese día, el pedido se cancela y el importe no se reintegra. |
+| Cuando el comprador cancela un pedido pagado (enseguida; si falla, la tarea lo reintenta ese día) | `compra-V-000003-cancelada-por-cliente` | Hola, Ana. Cancelaste tu pedido V-000003 y los productos volvieron a la tienda. Como indica la política de cancelación, el importe no se reintegra. Si tenés alguna duda, escribinos. ¡Te esperamos pronto en HuellaVet! 🐾 |
 | Al cancelarse por vencimiento | `compra-V-000003-cancelada` | Hola, Ana. Tu pedido V-000003 se canceló porque venció el plazo de retiro (25/11). Como te avisamos, el importe no se reintegra. Si tenés alguna duda, escribinos. 🐾 |
 
 Cada mensaje va en un solo renglón (WhatsApp no acepta saltos de línea en la plantilla).
