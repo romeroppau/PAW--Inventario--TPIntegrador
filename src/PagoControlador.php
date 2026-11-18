@@ -66,7 +66,7 @@ class PagoControlador
                 Response::json(['error' => 'No se pudo consultar el pago a Mercado Pago. Probá de nuevo en un momento.'], 502);
                 return;
             }
-            if ($pago['referencia'] !== $numero || self::procesar($pagos, $pago, (int) $comprador['id']) === 'no_existe') {
+            if ($pago === false || $pago['referencia'] !== $numero || self::procesar($pagos, $pago, (int) $comprador['id']) === 'no_existe') {
                 Response::json(['error' => self::NO_ENCONTRADA], 404);
                 return;
             }
@@ -108,6 +108,11 @@ class PagoControlador
         }
 
         $pago = MercadoPago::consultarPago($dataId);
+        if ($pago === false) {
+            // Mercado Pago no conoce ese pago (el aviso de prueba de "Simular notificación"): 200, así no reintenta.
+            Response::json(['resultado' => 'no_existe']);
+            return;
+        }
         if ($pago === null) {
             // 500: Mercado Pago vuelve a mandar el aviso más tarde.
             Response::error('No se pudo consultar el pago', 500);

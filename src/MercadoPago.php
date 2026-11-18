@@ -73,15 +73,20 @@ class MercadoPago
         return is_string($url) ? $url : null;
     }
 
-    // Consulta un pago a Mercado Pago. Devuelve ['id', 'estado', 'referencia', 'monto'] o null.
+    // Consulta un pago a Mercado Pago. Devuelve ['id', 'estado', 'referencia', 'monto'], false si
+    // Mercado Pago dice que ese pago no existe (por ejemplo, el aviso de "Simular notificación"), o null
+    // si no se pudo consultar (Mercado Pago no respondió).
     // estado: approved, rejected, cancelled, in_process, pending...
-    public static function consultarPago(string $pagoId): ?array
+    public static function consultarPago(string $pagoId): array|false|null
     {
         if (!ctype_digit($pagoId)) {
-            return null;
+            return false;
         }
 
         [$codigo, $datos] = self::pedir('GET', '/v1/payments/' . $pagoId);
+        if ($codigo === 404) {
+            return false;
+        }
         if ($codigo !== 200 || !is_array($datos)) {
             Logger::error("Inventario: no se pudo consultar el pago $pagoId a Mercado Pago (HTTP $codigo)");
             return null;

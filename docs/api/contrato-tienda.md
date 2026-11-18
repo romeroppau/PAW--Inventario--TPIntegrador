@@ -327,7 +327,8 @@ Lo llama Mercado Pago (webhook): `?type=payment&data.id=123456789`, con los head
 1. Verifica la firma: HMAC-SHA256 con `MP_WEBHOOK_SECRET` sobre `id:<data.id>;request-id:<x-request-id>;ts:<ts>;`. Si no coincide: `401`.
 2. Si no es un pago (`type` distinto de `payment`): `200 { "resultado": "ignorado" }`.
 3. Consulta el pago a Mercado Pago y lo registra (tabla de arriba): `200 { "resultado": "aprobado" }` (o `revivido`, `devolver`, `rechazado`, `repetido`, `ignorado`, `no_existe`).
-4. Si Mercado Pago no responde: `500`, y Mercado Pago reintenta el aviso más tarde.
+4. Si Mercado Pago no conoce ese pago (por ejemplo, el aviso de prueba de "Simular notificación" del panel): `200 { "resultado": "no_existe" }`.
+5. Si Mercado Pago no responde: `500`, y Mercado Pago reintenta el aviso más tarde.
 
 ## POST /api/tienda/pagos/simulado
 
