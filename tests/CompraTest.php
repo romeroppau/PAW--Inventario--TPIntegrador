@@ -87,4 +87,13 @@ class CompraTest extends TestCase
         // Los mensajes van en un solo renglón (WhatsApp no acepta saltos de línea).
         $this->assertStringNotContainsString("\n", $dia2);
     }
+
+    public function testElAvisoDeQueElCompradorCanceloDiceQueNoSeReintegra(): void
+    {
+        $mensaje = Compra::mensajeCanceladaPorComprador('Ana Pérez', 'V-000010');
+
+        $this->assertStringStartsWith('Hola, Ana. Cancelaste tu pedido V-000010', $mensaje);
+        $this->assertStringContainsString('el importe no se reintegra', $mensaje);
+        $this->assertStringNotContainsString("\n", $mensaje);
+    }
 }

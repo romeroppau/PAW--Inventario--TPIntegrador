@@ -152,6 +152,18 @@ class Compra
         );
     }
 
+    // Cuando el comprador cancela un pedido que ya pagó.
+    public static function mensajeCanceladaPorComprador(string $nombre, string $numero): string
+    {
+        return sprintf(
+            'Hola, %s. Cancelaste tu pedido %s y los productos volvieron a la tienda. '
+            . 'Como indica la política de cancelación, el importe no se reintegra. '
+            . 'Si tenés alguna duda, escribinos. ¡Te esperamos pronto en HuellaVet! 🐾',
+            self::primerNombre($nombre),
+            $numero
+        );
+    }
+
     // "martes 25/11"
     private static function diaConNombre(DateTimeImmutable $dia): string
     {

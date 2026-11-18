@@ -89,7 +89,7 @@ class CompraRepositorio
     public function delComprador(int $compradorId): array
     {
         $consulta = $this->db->prepare(
-            "SELECT f.numero, f.estado, DATE_FORMAT(f.fecha, '%Y-%m-%d %H:%i:%s') AS fecha, f.total
+            "SELECT f.numero, f.estado, DATE_FORMAT(f.fecha, '%Y-%m-%d %H:%i:%s') AS fecha, f.total, f.motivo_cancelacion
              FROM factura_compra f JOIN carrito c ON c.id = f.carrito_id
              WHERE c.cliente_id = ?
              ORDER BY f.fecha DESC, f.id DESC"
@@ -103,7 +103,7 @@ class CompraRepositorio
     public function detalle(string $numero, ?int $compradorId = null): ?array
     {
         $consulta = $this->db->prepare(
-            "SELECT f.id, f.numero, f.estado, DATE_FORMAT(f.fecha, '%Y-%m-%d %H:%i:%s') AS fecha, f.total,
+            "SELECT f.id, f.numero, f.estado, DATE_FORMAT(f.fecha, '%Y-%m-%d %H:%i:%s') AS fecha, f.total, f.motivo_cancelacion,
                     DATE_FORMAT(f.entregada_en, '%Y-%m-%d %H:%i:%s') AS entregada_en, c.cliente_id
              FROM factura_compra f JOIN carrito c ON c.id = f.carrito_id
              WHERE f.numero = ?"
@@ -133,11 +133,11 @@ class CompraRepositorio
         $orden = match ($estado) {
             'PAGADA' => 'f.fecha, f.id',
             'ENTREGADA' => 'f.entregada_en DESC, f.id DESC',
-            default => 'f.fecha DESC, f.id DESC',
+            default => 'f.cancelada_en DESC, f.id DESC',
         };
 
         $sql = "SELECT f.id, f.numero, f.estado, DATE_FORMAT(f.fecha, '%Y-%m-%d %H:%i:%s') AS fecha, f.total,
-                       u.nombre AS comprador,
+                       f.motivo_cancelacion, u.nombre AS comprador,
                        DATE_FORMAT(f.entregada_en, '%Y-%m-%d %H:%i:%s') AS entregada_en, v.nombre AS entregada_por
                 FROM factura_compra f
                 JOIN carrito c ON c.id = f.carrito_id
@@ -208,9 +208,10 @@ class CompraRepositorio
 
     // ---------- Cancelar ----------
 
-    // Arrepentimiento: el comprador cancela una compra que todavía no pagó. El stock vuelve.
-    // Devuelve 'ok', 'no_existe', 'pagada' o 'cancelada'.
-    public function cancelarSinPagar(string $numero, int $compradorId): string
+    // El comprador cancela su compra: antes de pagar (arrepentimiento) o ya pagada, mientras está
+    // para retirar. El stock vuelve; si estaba pagada, el importe no se reintegra (política).
+    // Devuelve 'sin_pagar' o 'pagada' (lo que se canceló), o 'no_existe', 'cancelada' o 'entregada'.
+    public function cancelarPorComprador(string $numero, int $compradorId): string
     {
         $this->db->beginTransaction();
         try {
@@ -223,12 +224,12 @@ class CompraRepositorio
                 $this->db->rollBack();
                 return 'cancelada';
             }
-            if ($factura['estado'] !== 'PENDIENTE_PAGO') {
+            if ($factura['estado'] === 'ENTREGADA') {
                 $this->db->rollBack();
-                return 'pagada';
+                return 'entregada';
             }
 
-            $this->cancelar($factura, $compradorId);
+            $this->cancelar($factura, $compradorId, 'COMPRADOR');
 
             $this->db->commit();
         } catch (Throwable $error) {
@@ -236,7 +237,7 @@ class CompraRepositorio
             throw $error;
         }
 
-        return 'ok';
+        return $factura['estado'] === 'PAGADA' ? 'pagada' : 'sin_pagar';
     }
 
     // ---------- Vencimientos ----------
@@ -282,7 +283,7 @@ class CompraRepositorio
                 return null;
             }
 
-            $this->cancelar($factura, null);
+            $this->cancelar($factura, null, $motivo === 'sin_pago' ? 'SIN_PAGO' : 'VENCIDA');
             $this->db->commit();
         } catch (Throwable $error) {
             $this->db->rollBack();
@@ -304,20 +305,29 @@ class CompraRepositorio
         )->fetchAll();
     }
 
-    // Las compras pagadas que se cancelaron (solo pueden haberse cancelado por vencer el plazo de
-    // retiro) en los últimos días, con el comprador: para el aviso de cancelación.
-    public function canceladasPagadasConComprador(DateTimeImmutable $ahora): array
+    // Las compras pagadas que se cancelaron en los últimos días, con el comprador y el motivo: para
+    // el aviso de cancelación. Son las que vencieron (VENCIDA) y las que canceló el comprador después
+    // de pagar (COMPRADOR con pago aprobado). Con $numero, solo esa.
+    public function canceladasPagadasConComprador(DateTimeImmutable $ahora, ?string $numero = null): array
     {
-        $consulta = $this->db->prepare(
-            "SELECT f.numero, DATE_FORMAT(f.fecha, '%Y-%m-%d %H:%i:%s') AS fecha, c.cliente_id, u.nombre
-             FROM factura_compra f
-             JOIN carrito c ON c.id = f.carrito_id
-             JOIN usuario u ON u.id = c.cliente_id
-             WHERE f.estado = 'CANCELADA' AND f.fecha >= ?
-               AND EXISTS (SELECT 1 FROM pago p WHERE p.factura_compra_id = f.id AND p.estado = 'APROBADO')"
-        );
-        // El plazo más largo posible (5 días hábiles con un fin de semana) entra holgado en 15 días.
-        $consulta->execute([$ahora->modify('-15 days')->format('Y-m-d H:i:s')]);
+        $sql = "SELECT f.numero, DATE_FORMAT(f.fecha, '%Y-%m-%d %H:%i:%s') AS fecha, f.motivo_cancelacion,
+                       DATE_FORMAT(f.cancelada_en, '%Y-%m-%d %H:%i:%s') AS cancelada_en, c.cliente_id, u.nombre
+                FROM factura_compra f
+                JOIN carrito c ON c.id = f.carrito_id
+                JOIN usuario u ON u.id = c.cliente_id
+                WHERE f.estado = 'CANCELADA' AND f.cancelada_en >= ?
+                  AND (f.motivo_cancelacion = 'VENCIDA'
+                       OR (f.motivo_cancelacion = 'COMPRADOR'
+                           AND EXISTS (SELECT 1 FROM pago p WHERE p.factura_compra_id = f.id AND p.estado = 'APROBADO')))";
+        // Las que se cancelaron hasta hace 2 días alcanzan: cada aviso sale solo el día de la cancelación.
+        $parametros = [$ahora->modify('-2 days')->format('Y-m-d H:i:s')];
+        if ($numero !== null) {
+            $sql .= ' AND f.numero = ?';
+            $parametros[] = $numero;
+        }
+
+        $consulta = $this->db->prepare($sql);
+        $consulta->execute($parametros);
 
         return $consulta->fetchAll();
     }
@@ -339,12 +349,14 @@ class CompraRepositorio
 
     // ---------- Ayudas ----------
 
-    // Cancela una factura ya bloqueada: factura CANCELADA, carrito CANCELADO y el stock vuelve
-    // (ENTRADA / VENTA_CANCELADA). $usuarioId es quien la cancela, o null si es automática.
-    // Se llama siempre dentro de una transacción. La usan el arrepentimiento y los vencimientos.
-    protected function cancelar(array $factura, ?int $usuarioId): void
+    // Cancela una factura ya bloqueada: factura CANCELADA (con el motivo y cuándo), carrito CANCELADO
+    // y el stock vuelve (ENTRADA / VENTA_CANCELADA). $usuarioId es quien la cancela, o null si es
+    // automática. $motivo: COMPRADOR, SIN_PAGO o VENCIDA.
+    // Se llama siempre dentro de una transacción. La usan el comprador y los vencimientos.
+    protected function cancelar(array $factura, ?int $usuarioId, string $motivo): void
     {
-        $this->db->prepare("UPDATE factura_compra SET estado = 'CANCELADA' WHERE id = ?")->execute([$factura['id']]);
+        $this->db->prepare("UPDATE factura_compra SET estado = 'CANCELADA', motivo_cancelacion = ?, cancelada_en = NOW() WHERE id = ?")
+            ->execute([$motivo, $factura['id']]);
         $this->db->prepare("UPDATE carrito SET estado = 'CANCELADO' WHERE id = ?")->execute([$factura['carrito_id']]);
 
         foreach ($this->itemsDeFactura((int) $factura['id']) as $item) {
@@ -440,6 +452,8 @@ class CompraRepositorio
                 ? max(0, Compra::pagarAntesDe($fecha)->getTimestamp() - time())
                 : null,
             'retirar_hasta' => in_array($estado, ['PENDIENTE_PAGO', 'PAGADA'], true) ? Compra::retirarHasta($fecha)->format('Y-m-d') : null,
+            // Por qué se canceló: COMPRADOR, SIN_PAGO o VENCIDA (solo en las canceladas).
+            'motivo_cancelacion' => $estado === 'CANCELADA' ? ($fila['motivo_cancelacion'] ?? null) : null,
         ];
     }
 }

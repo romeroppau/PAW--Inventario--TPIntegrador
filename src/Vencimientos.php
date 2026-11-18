@@ -5,7 +5,8 @@
 // - cancela las compras sin pagar con más de 15 minutos (a cualquier hora);
 // - cancela las pagadas que pasaron el plazo de retiro (desde las 9:00 del día siguiente al último),
 //   sin devolución; en los dos casos el stock vuelve;
-// - manda los recordatorios del día 2 y del día 4, y el aviso de cancelación (desde las 9:00).
+// - manda los recordatorios del día 2 y del día 4, y el aviso de cancelación (desde las 9:00);
+// - reintenta el aviso de los pedidos pagados que canceló el comprador (sale enseguida al cancelar).
 //
 // La tarea programada (GitHub Actions, cada 15 minutos) hace todo. Además, cada pedido a la tienda
 // cancela "al pasar" las vencidas (sin avisos): así nunca se muestra stock reservado de más aunque
@@ -67,17 +68,44 @@ class Vencimientos
         }
 
         foreach ($this->compras->canceladasPagadasConComprador($ahora) as $compra) {
-            $fecha = new DateTimeImmutable($compra['fecha']);
-            if (!Compra::avisoDeCancelacionHoy($fecha, $ahora)) {
-                continue;
-            }
-
-            $mensaje = Compra::mensajeCancelada($compra['nombre'], $compra['numero'], $fecha);
-            if (Avisos::mandar((int) $compra['cliente_id'], $mensaje, "compra-{$compra['numero']}-cancelada", $ahora)) {
+            if ($this->avisarCancelacion($compra, $ahora)) {
                 $nuevos++;
             }
         }
 
         return $nuevos;
+    }
+
+    // El aviso de que el comprador canceló un pedido pagado: sale enseguida, desde la cancelación.
+    // Si Backend falla, lo reintenta la tarea programada ese mismo día.
+    public function avisarCancelacionPorComprador(string $numero, DateTimeImmutable $ahora): void
+    {
+        foreach ($this->compras->canceladasPagadasConComprador($ahora, $numero) as $compra) {
+            $this->avisarCancelacion($compra, $ahora);
+        }
+    }
+
+    // El aviso de una compra pagada que se canceló, si corresponde hoy. Devuelve true si es nuevo.
+    // - Venció el plazo de retiro: el día de la cancelación, desde las 9:00.
+    // - La canceló el comprador: el mismo día que la canceló, a cualquier hora.
+    private function avisarCancelacion(array $compra, DateTimeImmutable $ahora): bool
+    {
+        $fecha = new DateTimeImmutable($compra['fecha']);
+
+        if ($compra['motivo_cancelacion'] === 'VENCIDA') {
+            if (!Compra::avisoDeCancelacionHoy($fecha, $ahora)) {
+                return false;
+            }
+            $mensaje = Compra::mensajeCancelada($compra['nombre'], $compra['numero'], $fecha);
+            $id = "compra-{$compra['numero']}-cancelada";
+        } else {
+            if (substr((string) $compra['cancelada_en'], 0, 10) !== $ahora->format('Y-m-d')) {
+                return false;
+            }
+            $mensaje = Compra::mensajeCanceladaPorComprador($compra['nombre'], $compra['numero']);
+            $id = "compra-{$compra['numero']}-cancelada-por-cliente";
+        }
+
+        return (bool) Avisos::mandar((int) $compra['cliente_id'], $mensaje, $id, $ahora);
     }
 }
