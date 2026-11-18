@@ -197,6 +197,7 @@ Si algo falla, no se reserva nada.
   "fecha": "2026-11-18 10:30:00",
   "total": 31999.80,
   "pagar_antes_de": "2026-11-18 10:45:00",
+  "segundos_para_pagar": 900,
   "retirar_hasta": "2026-11-25",
   "items": [
     { "producto_id": 101, "nombre": "Alimento cachorro 3 kg", "precio_unitario": 15999.90, "cantidad": 2, "subtotal": 31999.80 }
@@ -232,13 +233,15 @@ Mis compras, de la más nueva a la más vieja (las canceladas también).
       "fecha": "2026-11-18 10:30:00",
       "total": 31999.80,
       "retirar_hasta": "2026-11-25",
-      "pagar_antes_de": null
+      "pagar_antes_de": null,
+      "segundos_para_pagar": null
     }
   ]
 }
 ```
 
 - `pagar_antes_de`: solo en `PENDIENTE_PAGO`; en los demás estados, `null`.
+- `segundos_para_pagar`: solo en `PENDIENTE_PAGO` (si no, `null`): cuántos segundos faltan para que venza, contados por el servidor. La cuenta regresiva de la pantalla parte de este número, así no depende del reloj de la computadora del comprador.
 - `retirar_hasta`: en `PENDIENTE_PAGO` y `PAGADA`; en los demás estados, `null`.
 
 ---
@@ -306,6 +309,7 @@ Los pedidos de la veterinaria, en tres pestañas: **Para retirar** (`PAGADA`), *
       "fecha": "2026-11-18 10:30:00",
       "total": 31999.80,
       "pagar_antes_de": null,
+      "segundos_para_pagar": null,
       "retirar_hasta": "2026-11-25",
       "comprador": "Ana Pérez",
       "items": [ { "nombre": "Alimento cachorro 3 kg", "cantidad": 2 } ]

@@ -434,6 +434,11 @@ class CompraRepositorio
             'fecha' => $fila['fecha'],
             'total' => (float) $fila['total'],
             'pagar_antes_de' => $estado === 'PENDIENTE_PAGO' ? Compra::pagarAntesDe($fecha)->format('Y-m-d H:i:s') : null,
+            // Lo que falta para pagar, contado por el servidor: la cuenta regresiva de la pantalla parte de
+            // acá y no del reloj de la computadora del comprador (que puede estar adelantado o atrasado).
+            'segundos_para_pagar' => $estado === 'PENDIENTE_PAGO'
+                ? max(0, Compra::pagarAntesDe($fecha)->getTimestamp() - time())
+                : null,
             'retirar_hasta' => in_array($estado, ['PENDIENTE_PAGO', 'PAGADA'], true) ? Compra::retirarHasta($fecha)->format('Y-m-d') : null,
         ];
     }
