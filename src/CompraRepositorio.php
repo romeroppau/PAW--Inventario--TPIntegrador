@@ -122,6 +122,62 @@ class CompraRepositorio
         return $compra;
     }
 
+    // ---------- Veterinaria ----------
+
+    // Pedidos para retirar: las compras en un estado (por defecto PAGADA), con el comprador y sus
+    // productos, de la que vence antes a la que vence después (el plazo sale de la fecha).
+    public function deLaVeterinaria(string $estado): array
+    {
+        $consulta = $this->db->prepare(
+            "SELECT f.id, f.numero, f.estado, DATE_FORMAT(f.fecha, '%Y-%m-%d %H:%i:%s') AS fecha, f.total, u.nombre AS comprador
+             FROM factura_compra f
+             JOIN carrito c ON c.id = f.carrito_id
+             JOIN usuario u ON u.id = c.cliente_id
+             WHERE f.estado = ?
+             ORDER BY f.fecha, f.id"
+        );
+        $consulta->execute([$estado]);
+
+        return array_map(function (array $fila) {
+            $compra = $this->resumen($fila);
+            $compra['comprador'] = $fila['comprador'];
+            $compra['items'] = array_map(
+                fn (array $item) => ['nombre' => $item['nombre'], 'cantidad' => $item['cantidad']],
+                $this->itemsDeFactura((int) $fila['id'])
+            );
+            return $compra;
+        }, $consulta->fetchAll());
+    }
+
+    // La veterinaria constata el retiro en el local: PAGADA → ENTREGADA (con cuándo y quién),
+    // y el carrito a RETIRADO. Devuelve 'ok', 'no_existe' o 'no_lista'.
+    public function marcarEntregada(string $numero, int $veterinariaId): string
+    {
+        $this->db->beginTransaction();
+        try {
+            $factura = $this->bloquearFactura($numero);
+            if ($factura === null) {
+                $this->db->rollBack();
+                return 'no_existe';
+            }
+            if ($factura['estado'] !== 'PAGADA') {
+                $this->db->rollBack();
+                return 'no_lista';
+            }
+
+            $this->db->prepare("UPDATE factura_compra SET estado = 'ENTREGADA', entregada_en = NOW(), entregada_por = ? WHERE id = ?")
+                ->execute([$veterinariaId, $factura['id']]);
+            $this->db->prepare("UPDATE carrito SET estado = 'RETIRADO' WHERE id = ?")->execute([$factura['carrito_id']]);
+
+            $this->db->commit();
+        } catch (Throwable $error) {
+            $this->db->rollBack();
+            throw $error;
+        }
+
+        return 'ok';
+    }
+
     // ---------- Cancelar ----------
 
     // Arrepentimiento: el comprador cancela una compra que todavía no pagó. El stock vuelve.

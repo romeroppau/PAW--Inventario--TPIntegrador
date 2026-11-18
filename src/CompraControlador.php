@@ -2,11 +2,13 @@
 
 // Los endpoints de las compras de la tienda (contrato en docs/api/contrato-tienda.md):
 // confirmar el carrito, mis compras, una compra y el arrepentimiento antes de pagar.
-// Los usa el comprador (CLIENTE o RESCATISTA). El comprador sale siempre del JWT.
+// Los usa el comprador (CLIENTE o RESCATISTA), salvo los pedidos para retirar y "entregada", que
+// son de la veterinaria. El usuario sale siempre del JWT.
 class CompraControlador
 {
     private const ROLES_COMPRADOR = ['CLIENTE', 'RESCATISTA'];
     private const NO_ENCONTRADA = 'Compra no encontrada';
+    private const ESTADOS = ['PENDIENTE_PAGO', 'PAGADA', 'ENTREGADA', 'CANCELADA'];
 
     // POST /api/tienda/carrito/confirmar
     public static function confirmar(): void
@@ -66,6 +68,39 @@ class CompraControlador
             Response::json(['error' => 'La compra ya está pagada: no se puede cancelar'], 409);
         } elseif ($resultado === 'cancelada') {
             Response::json(['error' => 'La compra ya está cancelada'], 409);
+        } else {
+            Response::json($compras->detalle($numero));
+        }
+    }
+
+    // GET /api/inventario/compras?estado=PAGADA   (veterinaria: pedidos para retirar)
+    public static function deLaVeterinaria(): void
+    {
+        Auth::requerirRol(['VETERINARIO']);
+
+        // Un estado desconocido se ignora: se muestran los pagados (los que hay que entregar).
+        $estado = Request::query()['estado'] ?? '';
+        if (!in_array($estado, self::ESTADOS, true)) {
+            $estado = 'PAGADA';
+        }
+
+        Response::json(['datos' => self::repositorio()->deLaVeterinaria($estado)]);
+    }
+
+    // POST /api/tienda/compras/{numero}/entregada   (veterinaria: el comprador retiró el pedido)
+    public static function entregada(array $parametros): void
+    {
+        $sesion = Auth::requerirRol(['VETERINARIO']);
+        Auth::verificarCsrf($sesion);
+        $compras = self::repositorio();
+        $numero = (string) ($parametros['numero'] ?? '');
+
+        $resultado = $compras->marcarEntregada($numero, (int) $sesion['id']);
+
+        if ($resultado === 'no_existe') {
+            Response::json(['error' => self::NO_ENCONTRADA], 404);
+        } elseif ($resultado === 'no_lista') {
+            Response::json(['error' => 'La compra no está lista para retirar'], 409);
         } else {
             Response::json($compras->detalle($numero));
         }

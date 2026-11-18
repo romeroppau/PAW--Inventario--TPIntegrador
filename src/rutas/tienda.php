@@ -16,3 +16,7 @@ $router->post('/api/tienda/carrito/confirmar', [CompraControlador::class, 'confi
 $router->get('/api/tienda/compras', [CompraControlador::class, 'misCompras']);
 $router->get('/api/tienda/compras/{numero}', [CompraControlador::class, 'ver']);
 $router->post('/api/tienda/compras/{numero}/cancelar', [CompraControlador::class, 'cancelar']);
+
+// Retiro en el local (veterinaria).
+$router->get('/api/inventario/compras', [CompraControlador::class, 'deLaVeterinaria']);
+$router->post('/api/tienda/compras/{numero}/entregada', [CompraControlador::class, 'entregada']);

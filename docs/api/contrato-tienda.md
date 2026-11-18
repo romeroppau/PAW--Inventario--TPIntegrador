@@ -8,7 +8,7 @@ El catálogo (ver y buscar productos) está en [contrato.md](contrato.md). Las r
 
 ```
 El cliente arma el carrito (agrega, cambia cantidades, quita)        → el stock no se toca
-Confirma                                                             → factura V-… PENDIENTE_PAGO y stock reservado
+Toca "Ir a pagar" (confirmar)                                        → factura V-… PENDIENTE_PAGO y stock reservado
   ├─ se arrepiente antes de pagar (o no paga en 30 minutos)          → factura CANCELADA y el stock vuelve
   └─ paga con Mercado Pago                                           → factura PAGADA: 5 días hábiles para retirar
        ├─ la retira en el local y la veterinaria lo constata         → factura ENTREGADA
@@ -82,7 +82,9 @@ No hay devoluciones: una compra pagada solo termina entregada o vencida. La vete
 | `ENTREGADA` | `RETIRADO` | La veterinaria constató el retiro |
 | `CANCELADA` | `CANCELADO` | Arrepentimiento, falta de pago o vencimiento del plazo de retiro |
 
-Texto sugerido para el frontend: `PENDIENTE_PAGO` → "Pendiente de pago", `PAGADA` → "Lista para retirar", `ENTREGADA` → "Entregada", `CANCELADA` → "Cancelada".
+Texto sugerido para el frontend: `PENDIENTE_PAGO` → "Esperando el pago", `PAGADA` → "Lista para retirar", `ENTREGADA` → "Entregada", `CANCELADA` → "Cancelada".
+
+Para la gente, un pedido "confirmado" es uno **pagado** ("Lista para retirar"). Por eso el botón del carrito que llama a `confirmar` dice **"Ir a pagar"**: confirmar solo aparta el stock mientras se paga. `PENDIENTE_PAGO` es ese momento intermedio (como mucho 30 minutos) y la veterinaria nunca lo ve en su pantalla.
 
 ### Número de factura
 
