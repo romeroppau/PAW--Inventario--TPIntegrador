@@ -10,3 +10,9 @@ $router->get('/api/tienda/carrito', [CarritoControlador::class, 'ver']);
 $router->post('/api/tienda/carrito/items', [CarritoControlador::class, 'agregar']);
 $router->put('/api/tienda/carrito/items/{producto_id}', [CarritoControlador::class, 'cambiar']);
 $router->delete('/api/tienda/carrito/items/{producto_id}', [CarritoControlador::class, 'quitar']);
+
+// Compras (comprador).
+$router->post('/api/tienda/carrito/confirmar', [CompraControlador::class, 'confirmar']);
+$router->get('/api/tienda/compras', [CompraControlador::class, 'misCompras']);
+$router->get('/api/tienda/compras/{numero}', [CompraControlador::class, 'ver']);
+$router->post('/api/tienda/compras/{numero}/cancelar', [CompraControlador::class, 'cancelar']);
