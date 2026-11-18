@@ -110,14 +110,16 @@ El carrito abierto del comprador. Si todavía no tiene uno, responde un carrito 
       "precio_unitario": 15999.90,
       "cantidad": 2,
       "subtotal": 31999.80,
-      "stock": 20
+      "stock": 20,
+      "a_la_venta": true
     }
   ],
   "total": 31999.80
 }
 ```
 
-`stock` es lo que hay disponible hoy, para que la pantalla no ofrezca más.
+- `stock`: lo que hay disponible hoy, para que la pantalla no ofrezca más.
+- `a_la_venta`: `false` si el producto se dio de baja o venció después de agregarlo. La pantalla avisa que hay que quitarlo: así no se puede confirmar.
 
 ---
 
