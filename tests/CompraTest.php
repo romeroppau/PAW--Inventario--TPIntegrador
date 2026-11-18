@@ -88,6 +88,19 @@ class CompraTest extends TestCase
         $this->assertStringNotContainsString("\n", $dia2);
     }
 
+    public function testLosAvisosDelPagoTardio(): void
+    {
+        $confirmada = $this->fecha('2026-11-18 10:30:00');   // último día para retirar: miércoles 25
+
+        $aplicado = Compra::mensajePagoTardioAplicado('Ana Pérez', 'V-000010', $confirmada);
+        $this->assertStringContainsString('¡Hola, Ana!', $aplicado);
+        $this->assertStringContainsString('listo para retirar hasta el miércoles 25/11 inclusive', $aplicado);
+
+        $devuelto = Compra::mensajePagoDevuelto('Ana Pérez', 'V-000010');
+        $this->assertStringContainsString('te devolvimos el importe', $devuelto);
+        $this->assertStringNotContainsString("\n", $aplicado . $devuelto);
+    }
+
     public function testElAvisoDeQueElCompradorCanceloDiceQueNoSeReintegra(): void
     {
         $mensaje = Compra::mensajeCanceladaPorComprador('Ana Pérez', 'V-000010');

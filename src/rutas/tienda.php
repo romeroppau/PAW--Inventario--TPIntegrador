@@ -23,3 +23,9 @@ $router->post('/api/tienda/compras/{numero}/entregada', [CompraControlador::clas
 
 // Tarea programada (GitHub Actions, con X-Tarea-Token): vencimientos y recordatorios.
 $router->post('/api/tienda/tareas/vencer', [TareaControlador::class, 'vencer']);
+
+// Pago con Mercado Pago (comprador) y su aviso (Mercado Pago). En local y GitHub, el pago simulado.
+$router->post('/api/tienda/compras/{numero}/pago', [PagoControlador::class, 'pagar']);
+$router->post('/api/tienda/compras/{numero}/pago/confirmar', [PagoControlador::class, 'confirmar']);
+$router->post('/api/tienda/pagos/aviso', [PagoControlador::class, 'aviso']);
+$router->post('/api/tienda/pagos/simulado', [PagoControlador::class, 'simulado']);
