@@ -334,7 +334,9 @@ La llama GitHub Actions cada 15 minutos, con el header `X-Tarea-Token`. Hace tre
 2. cancela las compras `PAGADA` cuyo plazo de retiro ya pasó, sin devolución (el stock vuelve);
 3. manda los recordatorios del día (ver Avisos).
 
-Las mismas cancelaciones se hacen también **al pasar**: cada vez que se usa la tienda (ver el carrito, agregar, confirmar, ver las compras), primero se cancelan las vencidas. Así nunca se muestra stock reservado de más, aunque la tarea se atrase.
+Las mismas cancelaciones se hacen también **al pasar**: cada vez que se usa la tienda (el carrito, las compras del comprador, los pedidos de la veterinaria y "entregada"), primero se cancelan las vencidas. Así nunca se muestra stock reservado de más, aunque la tarea se atrase. Al pasar no se mandan avisos: el de cancelación lo manda la próxima corrida de la tarea, ese mismo día.
+
+Las cancelaciones por falta de pago salen a cualquier hora. Las de vencimiento del plazo de retiro y los avisos, desde las 9:00 (hora de Argentina). Si Backend no recibe un aviso, la cancelación se hace igual y el aviso se reintenta en las corridas siguientes del mismo día.
 
 **200 OK:**
 
@@ -342,11 +344,15 @@ Las mismas cancelaciones se hacen también **al pasar**: cada vez que se usa la 
 { "canceladas_sin_pago": 1, "canceladas_vencidas": 0, "avisos": 2 }
 ```
 
+`avisos` cuenta los avisos nuevos de esta corrida (los que ya se habían mandado no se cuentan).
+
 **Errores:** `401` sin el token o con otro.
 
 ## Avisos al comprador
 
-Se mandan por `POST /internal/notificaciones` (Backend), con tipo `COMPRA` y por los dos canales (la campana del sitio y WhatsApp). Cada aviso lleva un `id_operacion` fijo, así correr la tarea varias veces no lo repite.
+Se mandan por `POST /internal/notificaciones` (Backend), con tipo `COMPRA` y por los dos canales (la campana del sitio y WhatsApp). Cada aviso lleva un `id_operacion` fijo, así correr la tarea varias veces no lo repite. Como Backend no acepta dos notificaciones con el mismo `id_operacion`, cada canal agrega el suyo al final: `compra-V-000003-dia2-web` y `compra-V-000003-dia2-whatsapp`.
+
+Cada aviso sale solo en su día, desde las 9:00.
 
 | Cuándo | `id_operacion` | Mensaje (ejemplo) |
 |---|---|---|

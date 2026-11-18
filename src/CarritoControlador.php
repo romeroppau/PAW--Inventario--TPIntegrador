@@ -93,6 +93,9 @@ class CarritoControlador
             Auth::verificarCsrf($sesion);
         }
 
+        // Antes de mirar el carrito o las compras, se cancelan las vencidas (stock al día).
+        Vencimientos::alPasar();
+
         return $sesion;
     }
 

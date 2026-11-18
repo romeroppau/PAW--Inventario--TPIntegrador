@@ -239,6 +239,104 @@ class CompraRepositorio
         return 'ok';
     }
 
+    // ---------- Vencimientos ----------
+    // Los usa la clase Vencimientos (la tarea programada y la cancelación "al pasar").
+
+    // Los números de las compras vencidas: sin pagar con más de 30 minutos, o pagadas que pasaron
+    // el plazo de retiro. El SQL hace un primer filtro amplio y la regla exacta la decide Compra.
+    public function vencidas(DateTimeImmutable $ahora): array
+    {
+        $consulta = $this->db->prepare(
+            "SELECT numero, estado, DATE_FORMAT(fecha, '%Y-%m-%d %H:%i:%s') AS fecha
+             FROM factura_compra
+             WHERE (estado = 'PENDIENTE_PAGO' AND fecha <= ?) OR (estado = 'PAGADA' AND fecha <= ?)"
+        );
+        $consulta->execute([
+            $ahora->modify('-' . Compra::MINUTOS_PARA_PAGAR . ' minutes')->format('Y-m-d H:i:s'),
+            // 5 días hábiles son siempre más de 5 días de calendario.
+            $ahora->modify('-' . Compra::DIAS_HABILES_PARA_RETIRAR . ' days')->format('Y-m-d H:i:s'),
+        ]);
+
+        $numeros = [];
+        foreach ($consulta->fetchAll() as $fila) {
+            if (self::motivoDeVencimiento($fila, $ahora) !== null) {
+                $numeros[] = $fila['numero'];
+            }
+        }
+
+        return $numeros;
+    }
+
+    // Cancela una compra vencida (el stock vuelve; nadie la cancela: usuario null).
+    // Antes la bloquea y vuelve a mirar el estado: si mientras tanto se pagó, se entregó o ya se
+    // canceló, no hace nada. Devuelve 'sin_pago', 'sin_retirar' o null si no la canceló.
+    public function cancelarVencida(string $numero, DateTimeImmutable $ahora): ?string
+    {
+        $this->db->beginTransaction();
+        try {
+            $factura = $this->bloquearFactura($numero);
+            $motivo = $factura === null ? null : self::motivoDeVencimiento($factura, $ahora);
+
+            if ($motivo === null) {
+                $this->db->rollBack();
+                return null;
+            }
+
+            $this->cancelar($factura, null);
+            $this->db->commit();
+        } catch (Throwable $error) {
+            $this->db->rollBack();
+            throw $error;
+        }
+
+        return $motivo;
+    }
+
+    // Las compras pagadas, con el comprador: para ver a cuáles les toca recordatorio hoy.
+    public function pagadasConComprador(): array
+    {
+        return $this->db->query(
+            "SELECT f.numero, DATE_FORMAT(f.fecha, '%Y-%m-%d %H:%i:%s') AS fecha, c.cliente_id, u.nombre
+             FROM factura_compra f
+             JOIN carrito c ON c.id = f.carrito_id
+             JOIN usuario u ON u.id = c.cliente_id
+             WHERE f.estado = 'PAGADA'"
+        )->fetchAll();
+    }
+
+    // Las compras pagadas que se cancelaron (solo pueden haberse cancelado por vencer el plazo de
+    // retiro) en los últimos días, con el comprador: para el aviso de cancelación.
+    public function canceladasPagadasConComprador(DateTimeImmutable $ahora): array
+    {
+        $consulta = $this->db->prepare(
+            "SELECT f.numero, DATE_FORMAT(f.fecha, '%Y-%m-%d %H:%i:%s') AS fecha, c.cliente_id, u.nombre
+             FROM factura_compra f
+             JOIN carrito c ON c.id = f.carrito_id
+             JOIN usuario u ON u.id = c.cliente_id
+             WHERE f.estado = 'CANCELADA' AND f.fecha >= ?
+               AND EXISTS (SELECT 1 FROM pago p WHERE p.factura_compra_id = f.id AND p.estado = 'APROBADO')"
+        );
+        // El plazo más largo posible (5 días hábiles con un fin de semana) entra holgado en 15 días.
+        $consulta->execute([$ahora->modify('-15 days')->format('Y-m-d H:i:s')]);
+
+        return $consulta->fetchAll();
+    }
+
+    // Por qué venció una compra ('sin_pago' o 'sin_retirar'), o null si no venció.
+    private static function motivoDeVencimiento(array $factura, DateTimeImmutable $ahora): ?string
+    {
+        $fecha = new DateTimeImmutable($factura['fecha']);
+
+        if ($factura['estado'] === 'PENDIENTE_PAGO' && Compra::vencioSinPagar($fecha, $ahora)) {
+            return 'sin_pago';
+        }
+        if ($factura['estado'] === 'PAGADA' && Compra::vencioSinRetirar($fecha, $ahora)) {
+            return 'sin_retirar';
+        }
+
+        return null;
+    }
+
     // ---------- Ayudas ----------
 
     // Cancela una factura ya bloqueada: factura CANCELADA, carrito CANCELADO y el stock vuelve
@@ -260,9 +358,9 @@ class CompraRepositorio
     protected function bloquearFactura(string $numero): ?array
     {
         $consulta = $this->db->prepare(
-            'SELECT f.id, f.numero, f.estado, f.carrito_id, c.cliente_id
+            "SELECT f.id, f.numero, f.estado, DATE_FORMAT(f.fecha, '%Y-%m-%d %H:%i:%s') AS fecha, f.carrito_id, c.cliente_id
              FROM factura_compra f JOIN carrito c ON c.id = f.carrito_id
-             WHERE f.numero = ? FOR UPDATE'
+             WHERE f.numero = ? FOR UPDATE"
         );
         $consulta->execute([$numero]);
         $fila = $consulta->fetch();

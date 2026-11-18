@@ -79,6 +79,7 @@ class CompraControlador
     public static function deLaVeterinaria(): void
     {
         Auth::requerirRol(['VETERINARIO']);
+        Vencimientos::alPasar();
         $query = Request::query();
 
         // Un estado desconocido se ignora: se muestran los pagados (los que hay que entregar).
@@ -99,6 +100,8 @@ class CompraControlador
     {
         $sesion = Auth::requerirRol(['VETERINARIO']);
         Auth::verificarCsrf($sesion);
+        // Si el plazo de retiro ya venció, la compra se cancela acá y no se puede entregar.
+        Vencimientos::alPasar();
         $compras = self::repositorio();
         $numero = (string) ($parametros['numero'] ?? '');
 
@@ -123,6 +126,9 @@ class CompraControlador
         if ($conCsrf) {
             Auth::verificarCsrf($sesion);
         }
+
+        // Antes de mirar el carrito o las compras, se cancelan las vencidas (stock al día).
+        Vencimientos::alPasar();
 
         return $sesion;
     }

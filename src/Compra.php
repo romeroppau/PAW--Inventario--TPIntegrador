@@ -67,9 +67,22 @@ class Compra
     // ¿Una compra pagada ya se puede cancelar por no retirarla? Desde las 9:00 del día siguiente al último.
     public static function vencioSinRetirar(DateTimeImmutable $fecha, DateTimeImmutable $ahora): bool
     {
-        $cancelacion = self::retirarHasta($fecha)->modify('+1 day')->setTime(self::HORA_DE_AVISOS, 0);
+        return $ahora >= self::cancelacionPorVencimiento($fecha);
+    }
 
-        return $ahora >= $cancelacion;
+    // ¿Hoy toca el aviso de cancelación? El mismo día de la cancelación, desde las 9:00 (como los
+    // recordatorios: cada aviso sale solo en su día).
+    public static function avisoDeCancelacionHoy(DateTimeImmutable $fecha, DateTimeImmutable $ahora): bool
+    {
+        $cancelacion = self::cancelacionPorVencimiento($fecha);
+
+        return $ahora >= $cancelacion && $ahora->setTime(0, 0) == $cancelacion->setTime(0, 0);
+    }
+
+    // Cuándo se cancela una compra pagada que no se retiró: a las 9:00 del día siguiente al último.
+    private static function cancelacionPorVencimiento(DateTimeImmutable $fecha): DateTimeImmutable
+    {
+        return self::retirarHasta($fecha)->modify('+1 day')->setTime(self::HORA_DE_AVISOS, 0);
     }
 
     // ---------- Recordatorios ----------

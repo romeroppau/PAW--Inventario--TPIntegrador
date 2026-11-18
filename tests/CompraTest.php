@@ -49,6 +49,16 @@ class CompraTest extends TestCase
         $this->assertTrue(Compra::vencioSinRetirar($confirmada, $this->fecha('2026-11-26 09:00:00')));
     }
 
+    public function testElAvisoDeCancelacionSaleSoloElDiaQueSeCancela(): void
+    {
+        $confirmada = $this->fecha('2026-11-18 10:30:00');   // se cancela el jueves 26 a las 9:00
+
+        $this->assertFalse(Compra::avisoDeCancelacionHoy($confirmada, $this->fecha('2026-11-26 08:59:00')));
+        $this->assertTrue(Compra::avisoDeCancelacionHoy($confirmada, $this->fecha('2026-11-26 09:00:00')));
+        $this->assertTrue(Compra::avisoDeCancelacionHoy($confirmada, $this->fecha('2026-11-26 23:45:00')));
+        $this->assertFalse(Compra::avisoDeCancelacionHoy($confirmada, $this->fecha('2026-11-27 09:00:00')));
+    }
+
     public function testLosRecordatoriosSalenLosDiasHabilesDosYCuatroDesdeLasNueve(): void
     {
         $confirmada = $this->fecha('2026-11-18 10:30:00');

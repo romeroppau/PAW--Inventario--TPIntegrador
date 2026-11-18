@@ -20,3 +20,6 @@ $router->post('/api/tienda/compras/{numero}/cancelar', [CompraControlador::class
 // Retiro en el local (veterinaria).
 $router->get('/api/inventario/compras', [CompraControlador::class, 'deLaVeterinaria']);
 $router->post('/api/tienda/compras/{numero}/entregada', [CompraControlador::class, 'entregada']);
+
+// Tarea programada (GitHub Actions, con X-Tarea-Token): vencimientos y recordatorios.
+$router->post('/api/tienda/tareas/vencer', [TareaControlador::class, 'vencer']);
