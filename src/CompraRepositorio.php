@@ -7,10 +7,10 @@
 //   (SELECT ... FOR UPDATE), así dos pedidos al mismo tiempo no se pisan.
 class CompraRepositorio
 {
-    private const A_LA_VENTA = 'p.activo = 1 AND (p.fecha_vencimiento IS NULL OR p.fecha_vencimiento >= CURDATE())';
+    protected const A_LA_VENTA = 'p.activo = 1 AND (p.fecha_vencimiento IS NULL OR p.fecha_vencimiento >= CURDATE())';
 
     // Hora de Argentina (-03:00): la fecha de la factura y de los movimientos.
-    public function __construct(private PDO $db)
+    public function __construct(protected PDO $db)
     {
         $this->db->exec("SET time_zone = '-03:00'");
     }
@@ -104,7 +104,9 @@ class CompraRepositorio
     {
         $consulta = $this->db->prepare(
             "SELECT f.id, f.numero, f.estado, DATE_FORMAT(f.fecha, '%Y-%m-%d %H:%i:%s') AS fecha, f.total, f.motivo_cancelacion,
-                    DATE_FORMAT(f.entregada_en, '%Y-%m-%d %H:%i:%s') AS entregada_en, c.cliente_id
+                    DATE_FORMAT(f.entregada_en, '%Y-%m-%d %H:%i:%s') AS entregada_en, c.cliente_id,
+                    (SELECT p.id_externo FROM pago p WHERE p.factura_compra_id = f.id AND p.estado = 'APROBADO'
+                     ORDER BY p.id DESC LIMIT 1) AS operacion_mp
              FROM factura_compra f JOIN carrito c ON c.id = f.carrito_id
              WHERE f.numero = ?"
         );
@@ -117,6 +119,8 @@ class CompraRepositorio
 
         $compra = $this->resumen($fila);
         $compra['entregada_en'] = $fila['entregada_en'];
+        // El número de operación de Mercado Pago del pago aprobado (el comprobante), o null.
+        $compra['operacion_mp'] = $fila['operacion_mp'];
         $compra['items'] = $this->itemsDeFactura((int) $fila['id']);
 
         return $compra;
@@ -362,7 +366,7 @@ class CompraRepositorio
         foreach ($this->itemsDeFactura((int) $factura['id']) as $item) {
             $this->db->prepare('UPDATE producto SET stock = stock + ? WHERE id = ?')
                 ->execute([$item['cantidad'], $item['producto_id']]);
-            $this->registrarMovimiento($item['producto_id'], 'ENTRADA', 'VENTA_CANCELADA', $item['cantidad'], $usuarioId, "cancela-{$factura['numero']}-{$item['producto_id']}");
+            $this->registrarMovimiento($item['producto_id'], 'ENTRADA', 'VENTA_CANCELADA', $item['cantidad'], $usuarioId, $this->idUnico("cancela-{$factura['numero']}-{$item['producto_id']}"));
         }
     }
 
@@ -370,7 +374,7 @@ class CompraRepositorio
     protected function bloquearFactura(string $numero): ?array
     {
         $consulta = $this->db->prepare(
-            "SELECT f.id, f.numero, f.estado, DATE_FORMAT(f.fecha, '%Y-%m-%d %H:%i:%s') AS fecha, f.carrito_id, c.cliente_id
+            "SELECT f.id, f.numero, f.estado, DATE_FORMAT(f.fecha, '%Y-%m-%d %H:%i:%s') AS fecha, f.total, f.carrito_id, c.cliente_id
              FROM factura_compra f JOIN carrito c ON c.id = f.carrito_id
              WHERE f.numero = ? FOR UPDATE"
         );
@@ -422,6 +426,18 @@ class CompraRepositorio
             'cantidad' => (int) $fila['cantidad'],
             'subtotal' => round((float) $fila['precio_unitario'] * (int) $fila['cantidad'], 2),
         ], $consulta->fetchAll());
+    }
+
+    // Un id_operacion que todavía no se usó: el base, o el base con -2, -3... Hace falta cuando una
+    // compra se cancela, se revive con un pago tardío y se vuelve a cancelar. Se llama dentro de la
+    // transacción, con la factura bloqueada: nadie más registra movimientos de esa compra mientras tanto.
+    protected function idUnico(string $base): string
+    {
+        $consulta = $this->db->prepare('SELECT COUNT(*) FROM movimiento_inventario WHERE id_operacion = ? OR id_operacion LIKE ?');
+        $consulta->execute([$base, $base . '-%']);
+        $usados = (int) $consulta->fetchColumn();
+
+        return $usados === 0 ? $base : $base . '-' . ($usados + 1);
     }
 
     // Movimiento de stock de un producto. id_operacion es único: nunca se registra dos veces.

@@ -28,8 +28,10 @@ Toca "Ir a pagar" (confirmar)                                        → factura
 | `GET /api/tienda/compras` | Comprador | Mis compras |
 | `GET /api/tienda/compras/{numero}` | Comprador | Una compra, con su detalle |
 | `POST /api/tienda/compras/{numero}/cancelar` | Comprador | Cancelar la compra (antes de pagar o ya pagada, mientras está para retirar) |
-| `POST /api/tienda/compras/{numero}/pago` | Comprador | Pagar con Mercado Pago *(etapa 3)* |
-| `POST /api/tienda/pagos/aviso` | Mercado Pago | Aviso de pago *(etapa 3)* |
+| `POST /api/tienda/compras/{numero}/pago` | Comprador | Pagar con Mercado Pago: devuelve a dónde ir a pagar |
+| `POST /api/tienda/compras/{numero}/pago/confirmar` | Comprador | Al volver de Mercado Pago: confirma el pago |
+| `POST /api/tienda/pagos/aviso` | Mercado Pago | Aviso de pago (webhook, con firma) |
+| `POST /api/tienda/pagos/simulado` | Comprador | Pago simulado (solo local y GitHub) |
 | `GET /api/inventario/compras` | Veterinario | Pedidos para retirar, entregados y cancelados, con buscador |
 | `POST /api/tienda/compras/{numero}/entregada` | Veterinario | Constatar el retiro en el local |
 | `POST /api/tienda/tareas/vencer` | GitHub Actions | Cancelar las compras vencidas y mandar los recordatorios |
@@ -250,7 +252,7 @@ Mis compras, de la más nueva a la más vieja (las canceladas también).
 
 ## GET /api/tienda/compras/{numero}
 
-Una compra con sus productos. Mismo formato que la respuesta de confirmar, más `entregada_en` (`null` si todavía no se retiró).
+Una compra con sus productos. Mismo formato que la respuesta de confirmar, más `entregada_en` (`null` si todavía no se retiró) y `operacion_mp` (el número de operación de Mercado Pago del pago aprobado, el comprobante; `null` si no se pagó).
 
 **Errores:** `404 { "error": "Compra no encontrada" }` si no existe o es de otro comprador.
 
@@ -274,23 +276,69 @@ La factura pasa a `CANCELADA` con `motivo_cancelacion = COMPRADOR`, el carrito a
 
 ---
 
-## POST /api/tienda/compras/{numero}/pago *(etapa 3)*
+## Pago con Mercado Pago
 
-Crea el pago en Mercado Pago (preferencia, con la factura como referencia y las direcciones de vuelta y de aviso) y devuelve la dirección a la que se redirige al comprador.
+Checkout Pro (API de preferencias), **siempre con credenciales de prueba**: nunca se cobra de verdad, ni en producción. Inventario recibe `MP_ACCESS_TOKEN` (del vendedor de prueba), `MP_WEBHOOK_SECRET` (firma de los avisos) y `SITIO_URL` (la dirección pública del sitio).
 
-**200 OK:** `{ "url": "<dirección de pago de Mercado Pago>" }`
+```
+"Ir a pagar" → POST confirmar (compra, 15 min) → POST …/pago → el comprador va a Mercado Pago
+   ├─ vuelve a tienda/compra.html?numero=V-…&payment_id=…&status=… → POST …/pago/confirmar
+   └─ Mercado Pago avisa por su cuenta → POST /api/tienda/pagos/aviso
+```
 
-**Errores:** `404` si no existe o es de otro comprador; `409` si no está en `PENDIENTE_PAGO` (ya pagada, cancelada o vencidos los 15 minutos).
+La compra pasa a pagada solo cuando **nuestro servidor consulta el pago a Mercado Pago** (por la vuelta o por el aviso, el que llegue primero; `pago.id_externo` es único, así que el otro no repite nada). Nunca se cree lo que dice la dirección de vuelta ni el aviso.
 
-## POST /api/tienda/pagos/aviso *(etapa 3)*
+**Qué se registra según el pago:**
 
-Lo llama Mercado Pago cuando cambia el estado de un pago. No se cree lo que dice el aviso: se verifica su firma, se consulta el pago a Mercado Pago y se compara el monto con la factura. `pago.id_externo` es único: un aviso repetido no se registra dos veces.
+| Pago | Compra | Se registra el pago como | Aviso al comprador |
+|---|---|---|---|
+| Aprobado, compra esperando el pago | `PAGADA` | `APROBADO` | — |
+| Aprobado, compra ya cancelada (pago tardío) y **hay stock** | `PAGADA` otra vez (el stock se reserva de nuevo, movimiento `revive-V-…`) | `APROBADO` | "el pedido quedó listo para retirar" |
+| Aprobado, compra cancelada **sin stock**, ya pagada con otro pago o por otro monto | sin cambios | `DEVUELTO` (se pide la devolución a Mercado Pago) | "te devolvimos el importe" |
+| Rechazado | sigue `PENDIENTE_PAGO` (puede reintentar mientras le quede tiempo) | `RECHAZADO` | — |
+| Pendiente o en proceso | sin cambios (se espera el próximo aviso) | — | — |
 
-- Pago aprobado: pago `APROBADO`, factura `PAGADA`, carrito `PAGADO`.
-- Pago rechazado: pago `RECHAZADO`, factura `CANCELADA`, y el stock vuelve.
-- Si algo falla al procesarlo, responde `500` y Mercado Pago lo reintenta.
+La preferencia: los productos de la compra, `external_reference` = el número de la compra, vence junto con la compra (`expiration_date_to` = `pagar_antes_de`), **sin efectivo** (`ticket` y `atm` excluidos), **una sola cuota**, `binary_mode` (aprobado o rechazado al instante), vuelta a `tienda/compra.html?numero=V-…` y aviso a `/api/tienda/pagos/aviso`.
 
-El detalle se completa en la etapa 3.
+## POST /api/tienda/compras/{numero}/pago
+
+Comprador, con CSRF. Crea el pago y devuelve a dónde va el comprador.
+
+**200 OK:** `{ "url": "https://www.mercadopago.com.ar/checkout/..." }`. En local y en GitHub (`ENTORNO` = `local` o `ci`): `{ "url": "/tienda/pago-simulado.html?numero=V-…" }`.
+
+**Errores:** `404` si no existe o es de otro comprador; `409 { "error": "La compra no está esperando el pago" }` (ya pagada, cancelada o vencidos los 15 minutos); `503` si Mercado Pago no está configurado; `502` si Mercado Pago no respondió.
+
+## POST /api/tienda/compras/{numero}/pago/confirmar
+
+Comprador, con CSRF. Lo llama la página de la compra al volver de Mercado Pago, con el número de pago que Mercado Pago puso en la dirección de vuelta:
+
+```json
+{ "payment_id": "123456789" }
+```
+
+Consulta ese pago a Mercado Pago, lo registra (tabla de arriba) y devuelve **la compra actualizada** (como `GET /api/tienda/compras/{numero}`). Sin `payment_id`, devuelve la compra tal como está.
+
+**Errores:** `404` si no existe, es de otro comprador o el pago es de otra compra; `502` si Mercado Pago no respondió.
+
+## POST /api/tienda/pagos/aviso
+
+Lo llama Mercado Pago (webhook): `?type=payment&data.id=123456789`, con los headers `x-signature` y `x-request-id`.
+
+1. Verifica la firma: HMAC-SHA256 con `MP_WEBHOOK_SECRET` sobre `id:<data.id>;request-id:<x-request-id>;ts:<ts>;`. Si no coincide: `401`.
+2. Si no es un pago (`type` distinto de `payment`): `200 { "resultado": "ignorado" }`.
+3. Consulta el pago a Mercado Pago y lo registra (tabla de arriba): `200 { "resultado": "aprobado" }` (o `revivido`, `devolver`, `rechazado`, `repetido`, `ignorado`, `no_existe`).
+4. Si Mercado Pago no conoce ese pago (por ejemplo, el aviso de prueba de "Simular notificación" del panel): `200 { "resultado": "no_existe" }`.
+5. Si Mercado Pago no responde: `500`, y Mercado Pago reintenta el aviso más tarde.
+
+## POST /api/tienda/pagos/simulado
+
+**Solo en local y en GitHub** (en dev y producción: `404`). Comprador, con CSRF. Hace lo mismo que un pago de Mercado Pago, sin Mercado Pago. Sirve también para probar un pago tardío.
+
+```json
+{ "numero": "V-000123", "resultado": "aprobado" }
+```
+
+`resultado`: `aprobado` o `rechazado` (si no: `400`). **200 OK:** la compra actualizada, más `"resultado"` (como en el aviso).
 
 ---
 

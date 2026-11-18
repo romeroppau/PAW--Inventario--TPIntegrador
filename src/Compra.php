@@ -164,6 +164,30 @@ class Compra
         );
     }
 
+    // El pago llegó con la compra ya cancelada, pero había stock: la compra quedó lista para retirar.
+    public static function mensajePagoTardioAplicado(string $nombre, string $numero, DateTimeImmutable $fecha): string
+    {
+        return sprintf(
+            '🐾 ¡Hola, %s! Tu pago del pedido %s llegó después de que terminara el tiempo para pagar, '
+            . 'pero todavía teníamos tus productos: el pedido quedó listo para retirar hasta el %s inclusive. ¡Te esperamos!',
+            self::primerNombre($nombre),
+            $numero,
+            self::diaConNombre(self::retirarHasta($fecha))
+        );
+    }
+
+    // El pago no se pudo aplicar (la compra ya estaba cancelada y no quedaba stock, o ya estaba pagada):
+    // se devuelve el importe.
+    public static function mensajePagoDevuelto(string $nombre, string $numero): string
+    {
+        return sprintf(
+            'Hola, %s. No pudimos aplicar tu pago al pedido %s porque la compra ya estaba cancelada o ya estaba pagada, '
+            . 'así que te devolvimos el importe. Puede tardar unos días en verse en tu medio de pago. 🐾',
+            self::primerNombre($nombre),
+            $numero
+        );
+    }
+
     // "martes 25/11"
     private static function diaConNombre(DateTimeImmutable $dia): string
     {
