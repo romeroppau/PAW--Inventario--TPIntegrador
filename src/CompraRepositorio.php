@@ -242,7 +242,7 @@ class CompraRepositorio
     // ---------- Vencimientos ----------
     // Los usa la clase Vencimientos (la tarea programada y la cancelación "al pasar").
 
-    // Los números de las compras vencidas: sin pagar con más de 30 minutos, o pagadas que pasaron
+    // Los números de las compras vencidas: sin pagar con más de 15 minutos, o pagadas que pasaron
     // el plazo de retiro. El SQL hace un primer filtro amplio y la regla exacta la decide Compra.
     public function vencidas(DateTimeImmutable $ahora): array
     {

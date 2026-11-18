@@ -2,7 +2,7 @@
 
 // Los vencimientos de las compras de la tienda (contrato: docs/api/contrato-tienda.md,
 // "POST /api/tienda/tareas/vencer" y "Avisos al comprador"):
-// - cancela las compras sin pagar con más de 30 minutos (a cualquier hora);
+// - cancela las compras sin pagar con más de 15 minutos (a cualquier hora);
 // - cancela las pagadas que pasaron el plazo de retiro (desde las 9:00 del día siguiente al último),
 //   sin devolución; en los dos casos el stock vuelve;
 // - manda los recordatorios del día 2 y del día 4, y el aviso de cancelación (desde las 9:00).
