@@ -8,7 +8,9 @@ class CompraControlador
 {
     private const ROLES_COMPRADOR = ['CLIENTE', 'RESCATISTA'];
     private const NO_ENCONTRADA = 'Compra no encontrada';
-    private const ESTADOS = ['PENDIENTE_PAGO', 'PAGADA', 'ENTREGADA', 'CANCELADA'];
+    // Las pestañas de la veterinaria. PENDIENTE_PAGO no está: para ella todavía no es un pedido.
+    private const PESTANIAS = ['PAGADA', 'ENTREGADA', 'CANCELADA'];
+    private const BUSCAR_MAXIMO = 100;
 
     // POST /api/tienda/carrito/confirmar
     public static function confirmar(): void
@@ -73,18 +75,23 @@ class CompraControlador
         }
     }
 
-    // GET /api/inventario/compras?estado=PAGADA   (veterinaria: pedidos para retirar)
+    // GET /api/inventario/compras?estado=PAGADA&buscar=101   (veterinaria: pedidos para retirar)
     public static function deLaVeterinaria(): void
     {
         Auth::requerirRol(['VETERINARIO']);
+        $query = Request::query();
 
         // Un estado desconocido se ignora: se muestran los pagados (los que hay que entregar).
-        $estado = Request::query()['estado'] ?? '';
-        if (!in_array($estado, self::ESTADOS, true)) {
+        $estado = $query['estado'] ?? '';
+        if (!in_array($estado, self::PESTANIAS, true)) {
             $estado = 'PAGADA';
         }
 
-        Response::json(['datos' => self::repositorio()->deLaVeterinaria($estado)]);
+        // El buscador (número de pedido o nombre del comprador), dentro de la pestaña.
+        $buscar = is_string($query['buscar'] ?? null) ? trim($query['buscar']) : '';
+        $buscar = mb_substr($buscar, 0, self::BUSCAR_MAXIMO);
+
+        Response::json(['datos' => self::repositorio()->deLaVeterinaria($estado, $buscar)]);
     }
 
     // POST /api/tienda/compras/{numero}/entregada   (veterinaria: el comprador retiró el pedido)

@@ -29,7 +29,7 @@ Toca "Ir a pagar" (confirmar)                                        → factura
 | `POST /api/tienda/compras/{numero}/cancelar` | Comprador | Arrepentirse antes de pagar |
 | `POST /api/tienda/compras/{numero}/pago` | Comprador | Pagar con Mercado Pago *(etapa 3)* |
 | `POST /api/tienda/pagos/aviso` | Mercado Pago | Aviso de pago *(etapa 3)* |
-| `GET /api/inventario/compras` | Veterinario | Pedidos para retirar |
+| `GET /api/inventario/compras` | Veterinario | Pedidos para retirar, entregados y cancelados, con buscador |
 | `POST /api/tienda/compras/{numero}/entregada` | Veterinario | Constatar el retiro en el local |
 | `POST /api/tienda/tareas/vencer` | GitHub Actions | Cancelar las compras vencidas y mandar los recordatorios |
 
@@ -286,9 +286,14 @@ El detalle se completa en la etapa 3.
 
 ## GET /api/inventario/compras
 
-Pedidos para retirar, de la veterinaria. Por defecto trae los `PAGADA` (los que hay que entregar), ordenados por fecha límite de retiro.
+Los pedidos de la veterinaria, en tres pestañas: **Para retirar** (`PAGADA`), **Entregados** (`ENTREGADA`) y **Cancelados** (`CANCELADA`). Las compras `PENDIENTE_PAGO` no aparecen en ninguna: para la veterinaria todavía no son pedidos.
 
-**Parámetro (opcional):** `estado` = `PENDIENTE_PAGO`, `PAGADA`, `ENTREGADA` o `CANCELADA`. Un valor desconocido se ignora.
+**Parámetros (opcionales):**
+
+- `estado` = `PAGADA` (por defecto), `ENTREGADA` o `CANCELADA`. Un valor desconocido se ignora y se usa `PAGADA`.
+- `buscar`: el buscador, dentro de la pestaña elegida. Encuentra por **número de pedido** (por los dígitos del final: `101`, `V-101` y `V-000101` encuentran `V-000101`) o por **nombre del comprador** (cualquier parte, sin importar mayúsculas). Hasta 100 caracteres.
+
+**Orden:** Para retirar, del que vence antes al que vence después. Entregados y Cancelados, los más recientes primero (son historial).
 
 **200 OK:**
 
@@ -300,6 +305,7 @@ Pedidos para retirar, de la veterinaria. Por defecto trae los `PAGADA` (los que 
       "estado": "PAGADA",
       "fecha": "2026-11-18 10:30:00",
       "total": 31999.80,
+      "pagar_antes_de": null,
       "retirar_hasta": "2026-11-25",
       "comprador": "Ana Pérez",
       "items": [ { "nombre": "Alimento cachorro 3 kg", "cantidad": 2 } ]
@@ -307,6 +313,8 @@ Pedidos para retirar, de la veterinaria. Por defecto trae los `PAGADA` (los que 
   ]
 }
 ```
+
+En la pestaña Entregados, cada pedido trae además `entregada_en` (`"2026-11-20 16:05:00"`) y `entregada_por` (el nombre de la veterinaria que lo entregó).
 
 ## POST /api/tienda/compras/{numero}/entregada
 

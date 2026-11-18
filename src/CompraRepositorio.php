@@ -124,23 +124,51 @@ class CompraRepositorio
 
     // ---------- Veterinaria ----------
 
-    // Pedidos para retirar: las compras en un estado (por defecto PAGADA), con el comprador y sus
-    // productos, de la que vence antes a la que vence después (el plazo sale de la fecha).
-    public function deLaVeterinaria(string $estado): array
+    // Pedidos de una pestaña de la veterinaria (PAGADA, ENTREGADA o CANCELADA), con el comprador y
+    // sus productos. Con $buscar, solo los que coinciden por número de pedido o nombre del comprador.
+    // Para retirar: del que vence antes al que vence después (el plazo sale de la fecha).
+    // Entregados y cancelados (historial): los más recientes primero.
+    public function deLaVeterinaria(string $estado, string $buscar = ''): array
     {
-        $consulta = $this->db->prepare(
-            "SELECT f.id, f.numero, f.estado, DATE_FORMAT(f.fecha, '%Y-%m-%d %H:%i:%s') AS fecha, f.total, u.nombre AS comprador
-             FROM factura_compra f
-             JOIN carrito c ON c.id = f.carrito_id
-             JOIN usuario u ON u.id = c.cliente_id
-             WHERE f.estado = ?
-             ORDER BY f.fecha, f.id"
-        );
-        $consulta->execute([$estado]);
+        $orden = match ($estado) {
+            'PAGADA' => 'f.fecha, f.id',
+            'ENTREGADA' => 'f.entregada_en DESC, f.id DESC',
+            default => 'f.fecha DESC, f.id DESC',
+        };
 
-        return array_map(function (array $fila) {
+        $sql = "SELECT f.id, f.numero, f.estado, DATE_FORMAT(f.fecha, '%Y-%m-%d %H:%i:%s') AS fecha, f.total,
+                       u.nombre AS comprador,
+                       DATE_FORMAT(f.entregada_en, '%Y-%m-%d %H:%i:%s') AS entregada_en, v.nombre AS entregada_por
+                FROM factura_compra f
+                JOIN carrito c ON c.id = f.carrito_id
+                JOIN usuario u ON u.id = c.cliente_id
+                LEFT JOIN usuario v ON v.id = f.entregada_por
+                WHERE f.estado = ?";
+        $parametros = [$estado];
+
+        if ($buscar !== '') {
+            // El número se busca por los dígitos del final: "101", "V-101" y "V-000101" encuentran V-000101.
+            // El nombre, por cualquier parte. Se escapan % y _ para que se busquen como letras.
+            $digitos = ltrim(preg_replace('/\D/', '', $buscar), '0');
+            $condiciones = ["u.nombre LIKE ?"];
+            $parametros[] = '%' . addcslashes($buscar, '%_\\') . '%';
+            if ($digitos !== '') {
+                $condiciones[] = "f.numero LIKE ?";
+                $parametros[] = '%' . $digitos;
+            }
+            $sql .= ' AND (' . implode(' OR ', $condiciones) . ')';
+        }
+
+        $consulta = $this->db->prepare("$sql ORDER BY $orden");
+        $consulta->execute($parametros);
+
+        return array_map(function (array $fila) use ($estado) {
             $compra = $this->resumen($fila);
             $compra['comprador'] = $fila['comprador'];
+            if ($estado === 'ENTREGADA') {
+                $compra['entregada_en'] = $fila['entregada_en'];
+                $compra['entregada_por'] = $fila['entregada_por'];
+            }
             $compra['items'] = array_map(
                 fn (array $item) => ['nombre' => $item['nombre'], 'cantidad' => $item['cantidad']],
                 $this->itemsDeFactura((int) $fila['id'])
