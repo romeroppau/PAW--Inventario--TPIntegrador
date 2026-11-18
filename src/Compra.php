@@ -8,11 +8,11 @@
 class Compra
 {
     // Plazos (contrato, "Plazos").
-    public const MINUTOS_PARA_PAGAR = 30;
+    public const MINUTOS_PARA_PAGAR = 15;
     public const DIAS_HABILES_PARA_RETIRAR = 5;
 
     // Los recordatorios y las cancelaciones por vencimiento salen desde esta hora (no de madrugada).
-    // Las cancelaciones por falta de pago (30 minutos) no esperan: salen a cualquier hora.
+    // Las cancelaciones por falta de pago (15 minutos) no esperan: salen a cualquier hora.
     public const HORA_DE_AVISOS = 9;
 
     // Días hábiles en que se manda cada recordatorio.
@@ -29,7 +29,7 @@ class Compra
 
     // ---------- Plazos ----------
 
-    // Hasta cuándo se puede pagar: 30 minutos desde la confirmación.
+    // Hasta cuándo se puede pagar: 15 minutos desde la confirmación.
     public static function pagarAntesDe(DateTimeImmutable $fecha): DateTimeImmutable
     {
         return $fecha->modify('+' . self::MINUTOS_PARA_PAGAR . ' minutes');
@@ -58,7 +58,7 @@ class Compra
         return self::diaHabil($fecha, self::DIAS_HABILES_PARA_RETIRAR);
     }
 
-    // ¿Una compra sin pagar ya pasó los 30 minutos?
+    // ¿Una compra sin pagar ya pasó los 15 minutos?
     public static function vencioSinPagar(DateTimeImmutable $fecha, DateTimeImmutable $ahora): bool
     {
         return $ahora >= self::pagarAntesDe($fecha);

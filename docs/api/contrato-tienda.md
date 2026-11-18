@@ -9,7 +9,7 @@ El catálogo (ver y buscar productos) está en [contrato.md](contrato.md). Las r
 ```
 El cliente arma el carrito (agrega, cambia cantidades, quita)        → el stock no se toca
 Toca "Ir a pagar" (confirmar)                                        → factura V-… PENDIENTE_PAGO y stock reservado
-  ├─ se arrepiente antes de pagar (o no paga en 30 minutos)          → factura CANCELADA y el stock vuelve
+  ├─ se arrepiente antes de pagar (o no paga en 15 minutos)          → factura CANCELADA y el stock vuelve
   └─ paga con Mercado Pago                                           → factura PAGADA: 5 días hábiles para retirar
        ├─ la retira en el local y la veterinaria lo constata         → factura ENTREGADA
        └─ no la retira en 5 días hábiles                             → factura CANCELADA, sin devolución, y el stock vuelve
@@ -64,7 +64,7 @@ El precio de cada producto se copia **al agregarlo al carrito** (`precio_unitari
 
 | Plazo | Desde | Si se vence |
 |---|---|---|
-| **30 minutos para pagar** | La confirmación | La compra se cancela, el stock vuelve y el carrito se descarta |
+| **15 minutos para pagar** | La confirmación | La compra se cancela, el stock vuelve y el carrito se descarta |
 | **5 días hábiles para retirar** (lunes a viernes, sin contar feriados), hasta el último día inclusive | La confirmación | La compra se cancela **sin devolución del importe** y el stock vuelve |
 
 Por ejemplo, una compra confirmada el miércoles 18/11 se puede retirar hasta el miércoles 25/11 inclusive.
@@ -84,7 +84,7 @@ No hay devoluciones: una compra pagada solo termina entregada o vencida. La vete
 
 Texto sugerido para el frontend: `PENDIENTE_PAGO` → "Esperando el pago", `PAGADA` → "Lista para retirar", `ENTREGADA` → "Entregada", `CANCELADA` → "Cancelada".
 
-Para la gente, un pedido "confirmado" es uno **pagado** ("Lista para retirar"). Por eso el botón del carrito que llama a `confirmar` dice **"Ir a pagar"**: confirmar solo aparta el stock mientras se paga. `PENDIENTE_PAGO` es ese momento intermedio (como mucho 30 minutos) y la veterinaria nunca lo ve en su pantalla.
+Para la gente, un pedido "confirmado" es uno **pagado** ("Lista para retirar"). Por eso el botón del carrito que llama a `confirmar` dice **"Ir a pagar"**: confirmar solo aparta el stock mientras se paga. `PENDIENTE_PAGO` es ese momento intermedio (como mucho 15 minutos) y la veterinaria nunca lo ve en su pantalla.
 
 ### Número de factura
 
@@ -196,7 +196,8 @@ Si algo falla, no se reserva nada.
   "estado": "PENDIENTE_PAGO",
   "fecha": "2026-11-18 10:30:00",
   "total": 31999.80,
-  "pagar_antes_de": "2026-11-18 11:00:00",
+  "pagar_antes_de": "2026-11-18 10:45:00",
+  "segundos_para_pagar": 900,
   "retirar_hasta": "2026-11-25",
   "items": [
     { "producto_id": 101, "nombre": "Alimento cachorro 3 kg", "precio_unitario": 15999.90, "cantidad": 2, "subtotal": 31999.80 }
@@ -232,13 +233,15 @@ Mis compras, de la más nueva a la más vieja (las canceladas también).
       "fecha": "2026-11-18 10:30:00",
       "total": 31999.80,
       "retirar_hasta": "2026-11-25",
-      "pagar_antes_de": null
+      "pagar_antes_de": null,
+      "segundos_para_pagar": null
     }
   ]
 }
 ```
 
 - `pagar_antes_de`: solo en `PENDIENTE_PAGO`; en los demás estados, `null`.
+- `segundos_para_pagar`: solo en `PENDIENTE_PAGO` (si no, `null`): cuántos segundos faltan para que venza, contados por el servidor. La cuenta regresiva de la pantalla parte de este número, así no depende del reloj de la computadora del comprador.
 - `retirar_hasta`: en `PENDIENTE_PAGO` y `PAGADA`; en los demás estados, `null`.
 
 ---
@@ -270,7 +273,7 @@ Crea el pago en Mercado Pago (preferencia, con la factura como referencia y las 
 
 **200 OK:** `{ "url": "<dirección de pago de Mercado Pago>" }`
 
-**Errores:** `404` si no existe o es de otro comprador; `409` si no está en `PENDIENTE_PAGO` (ya pagada, cancelada o vencidos los 30 minutos).
+**Errores:** `404` si no existe o es de otro comprador; `409` si no está en `PENDIENTE_PAGO` (ya pagada, cancelada o vencidos los 15 minutos).
 
 ## POST /api/tienda/pagos/aviso *(etapa 3)*
 
@@ -306,6 +309,7 @@ Los pedidos de la veterinaria, en tres pestañas: **Para retirar** (`PAGADA`), *
       "fecha": "2026-11-18 10:30:00",
       "total": 31999.80,
       "pagar_antes_de": null,
+      "segundos_para_pagar": null,
       "retirar_hasta": "2026-11-25",
       "comprador": "Ana Pérez",
       "items": [ { "nombre": "Alimento cachorro 3 kg", "cantidad": 2 } ]
@@ -330,7 +334,7 @@ La veterinaria constata que el comprador retiró el pedido en el local. Solo par
 
 La llama GitHub Actions cada 15 minutos, con el header `X-Tarea-Token`. Hace tres cosas:
 
-1. cancela las compras `PENDIENTE_PAGO` con más de 30 minutos (el stock vuelve);
+1. cancela las compras `PENDIENTE_PAGO` con más de 15 minutos (el stock vuelve);
 2. cancela las compras `PAGADA` cuyo plazo de retiro ya pasó, sin devolución (el stock vuelve);
 3. manda los recordatorios del día (ver Avisos).
 
