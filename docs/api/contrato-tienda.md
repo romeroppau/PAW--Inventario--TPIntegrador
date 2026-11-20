@@ -20,7 +20,8 @@ Toca "Ir a pagar" (confirmar)                                        → factura
 
 | Método y ruta | Quién | Para qué |
 |---|---|---|
-| `GET /api/tienda/carrito` | Comprador | Ver su carrito abierto, con el total |
+| `GET /api/tienda/carrito` | Comprador | Ver su carrito abierto, con el total y los plazos |
+| `GET /api/tienda/productos/{id}/imagen` | Público | La foto de un producto, como imagen |
 | `POST /api/tienda/carrito/items` | Comprador | Agregar un producto |
 | `PUT /api/tienda/carrito/items/{producto_id}` | Comprador | Cambiar la cantidad de un producto |
 | `DELETE /api/tienda/carrito/items/{producto_id}` | Comprador | Quitar un producto |
@@ -116,15 +117,26 @@ El carrito abierto del comprador. Si todavía no tiene uno, responde un carrito 
       "cantidad": 2,
       "subtotal": 31999.80,
       "stock": 20,
-      "a_la_venta": true
+      "a_la_venta": true,
+      "tiene_imagen": true
     }
   ],
-  "total": 31999.80
+  "total": 31999.80,
+  "minutos_para_pagar": 15,
+  "retirar_hasta_si_compra_hoy": "2026-11-25"
 }
 ```
 
 - `stock`: lo que hay disponible hoy, para que la pantalla no ofrezca más.
 - `a_la_venta`: `false` si el producto se dio de baja o venció después de agregarlo. La pantalla avisa que hay que quitarlo: así no se puede confirmar.
+- `tiene_imagen`: si el producto tiene foto. La foto se pide aparte, con `GET /api/tienda/productos/{id}/imagen`.
+- `minutos_para_pagar` y `retirar_hasta_si_compra_hoy`: para explicar los plazos antes de pagar ("tenés 15 minutos para pagar" y "retirás hasta el miércoles 25/11"). Vienen también con el carrito vacío.
+
+## GET /api/tienda/productos/{id}/imagen
+
+Público. La foto de un producto **como imagen** (no dentro de un JSON), para usarla directo en `<img src="/api/tienda/productos/101/imagen">`. Responde con su tipo (`image/png`, `image/jpeg` o `image/webp`) y el navegador la guarda una hora (`Cache-Control: public, max-age=3600`). Funciona aunque el producto ya no esté a la venta (el carrito puede tener uno que se dio de baja).
+
+**Errores:** `404 { "error": "Imagen no encontrada" }` si el producto no existe o no tiene foto.
 
 ---
 

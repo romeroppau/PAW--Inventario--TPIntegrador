@@ -32,12 +32,12 @@ class CarritoRepositorio
     {
         $carritoId = $this->abierto($compradorId);
         if ($carritoId === null) {
-            return ['items' => [], 'total' => 0.0];
+            return ['items' => [], 'total' => 0.0] + self::plazos();
         }
 
         $consulta = $this->db->prepare(
             'SELECT i.producto_id, p.nombre, i.precio_unitario, i.cantidad, p.stock,
-                    (' . self::A_LA_VENTA . ') AS a_la_venta
+                    (' . self::A_LA_VENTA . ') AS a_la_venta, (p.imagen IS NOT NULL) AS tiene_imagen
              FROM item_carrito i
              JOIN producto p ON p.id = i.producto_id
              WHERE i.carrito_id = ?
@@ -58,10 +58,22 @@ class CarritoRepositorio
                 'subtotal' => $subtotal,
                 'stock' => (int) $fila['stock'],
                 'a_la_venta' => (bool) $fila['a_la_venta'],
+                // La foto se pide aparte: /api/tienda/productos/{id}/imagen (solo si la tiene).
+                'tiene_imagen' => (bool) $fila['tiene_imagen'],
             ];
         }
 
-        return ['items' => $items, 'total' => round($total, 2)];
+        return ['items' => $items, 'total' => round($total, 2)] + self::plazos();
+    }
+
+    // Los plazos para mostrar antes de pagar: cuántos minutos hay para pagar y, si se compra hoy,
+    // hasta qué día se puede retirar (5 días hábiles; la misma cuenta que usa la compra).
+    private static function plazos(): array
+    {
+        return [
+            'minutos_para_pagar' => Compra::MINUTOS_PARA_PAGAR,
+            'retirar_hasta_si_compra_hoy' => Compra::retirarHasta(new DateTimeImmutable())->format('Y-m-d'),
+        ];
     }
 
     // Agrega un producto (si ya estaba, suma la cantidad; el precio queda el de la primera vez).

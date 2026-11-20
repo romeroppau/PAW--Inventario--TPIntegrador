@@ -5,6 +5,9 @@
 // index.php carga todos los archivos de src/rutas/: cada uno agrega sus rutas al mismo $router.
 // Las clases (CarritoControlador, etc.) las carga solo el autoload de index.php.
 
+// La foto de un producto, como imagen (la usa el carrito). Pública, como el catálogo.
+$router->get('/api/tienda/productos/{id}/imagen', [ImagenProductoControlador::class, 'ver']);
+
 // Carrito (comprador: cliente o rescatista).
 $router->get('/api/tienda/carrito', [CarritoControlador::class, 'ver']);
 $router->post('/api/tienda/carrito/items', [CarritoControlador::class, 'agregar']);
