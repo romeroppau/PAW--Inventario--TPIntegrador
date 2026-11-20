@@ -134,7 +134,7 @@ El carrito abierto del comprador. Si todavía no tiene uno, responde un carrito 
 
 ## GET /api/tienda/productos/{id}/imagen
 
-Público. La foto de un producto **como imagen** (no dentro de un JSON), para usarla directo en `<img src="/api/tienda/productos/101/imagen">`. Responde con su tipo (`image/png`, `image/jpeg` o `image/webp`) y el navegador la guarda una hora (`Cache-Control: public, max-age=3600`). Funciona aunque el producto ya no esté a la venta (el carrito puede tener uno que se dio de baja).
+Público. La foto de un producto **como imagen** (no dentro de un JSON), para usarla directo en `<img src="/api/tienda/productos/101/imagen">`. Responde con su tipo (`image/png`, `image/jpeg` o `image/webp`). El navegador la guarda, pero antes de usarla pregunta si cambió (`Cache-Control: no-cache` y `ETag`): si es la misma, `304` sin la foto; si la veterinaria la cambió, la nueva. La usan el catálogo y el carrito. Funciona aunque el producto ya no esté a la venta (el carrito puede tener uno que se dio de baja).
 
 **Errores:** `404 { "error": "Imagen no encontrada" }` si el producto no existe o no tiene foto.
 
