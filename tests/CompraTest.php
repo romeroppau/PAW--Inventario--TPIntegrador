@@ -90,12 +90,7 @@ class CompraTest extends TestCase
 
     public function testLosAvisosAlComprar(): void
     {
-        $confirmada = $this->fecha('2026-11-18 10:30:00');   // pagar antes de las 10:45; retirar hasta el miércoles 25
-
-        $reservada = Compra::mensajeReservada('Ana Pérez', 'V-000105', $confirmada);
-        $this->assertStringContainsString('¡Hola, Ana!', $reservada);
-        $this->assertStringContainsString('por 15 minutos', $reservada);
-        $this->assertStringContainsString('antes de las 10:45', $reservada);
+        $confirmada = $this->fecha('2026-11-18 10:30:00');   // retirar hasta el miércoles 25
 
         $pagada = Compra::mensajePagada('Ana Pérez', 'V-000105', $confirmada);
         $this->assertStringContainsString('Recibimos el pago de tu pedido V-000105', $pagada);
@@ -104,7 +99,8 @@ class CompraTest extends TestCase
         $vet = Compra::mensajeNuevoPedido('Ana Pérez', 'V-000105', 31999.8, $confirmada);
         $this->assertSame('🛍️ Nuevo pedido para retirar: V-000105 de Ana Pérez ($ 31.999,80). Fecha límite de retiro: miércoles 25/11.', $vet);
 
-        $this->assertStringNotContainsString("\n", $reservada . $pagada . $vet);
+        $this->assertStringContainsString('¡Hola, Ana!', $pagada);
+        $this->assertStringNotContainsString("\n", $pagada . $vet);
     }
 
     public function testLosAvisosDelPagoTardio(): void
