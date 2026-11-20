@@ -31,7 +31,7 @@ class PagoControlador
         }
 
         // El link vence 1 minuto antes que la compra. Si ya no queda ese minuto, no se abre: vencería enseguida.
-        $vence = Compra::linkDePagoVence(new DateTimeImmutable($compra['fecha']));
+        $vence = Compra::linkDePagoVence(new DateTimeImmutable($compra['pagar_antes_de']));
         if (new DateTimeImmutable() >= $vence) {
             Response::json(['error' => 'Ya no queda tiempo para pagar esta compra'], 409);
             return;

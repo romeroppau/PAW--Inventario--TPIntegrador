@@ -2,10 +2,10 @@
 
 // Los vencimientos de las compras de la tienda (contrato: docs/api/contrato-tienda.md,
 // "POST /api/tienda/tareas/vencer" y "Avisos al comprador"):
-// - cancela las compras sin pagar con más de 15 minutos (a cualquier hora);
-// - cancela las pagadas que pasaron el plazo de retiro (desde las 9:00 del día siguiente al último),
+// - cancela las compras sin pagar que pasaron su tiempo para pagar (a cualquier hora);
+// - cancela las pagadas que pasaron su plazo de retiro (desde la hora de los avisos del día siguiente),
 //   sin devolución; en los dos casos el stock vuelve;
-// - manda los recordatorios del día 2 y del día 4, y el aviso de cancelación (desde las 9:00);
+// - manda el primer y el último recordatorio, y el aviso de cancelación (desde la hora de los avisos);
 // - reintenta el aviso de los pedidos pagados que canceló el comprador (sale enseguida al cancelar).
 //
 // La tarea programada (GitHub Actions, cada 15 minutos) hace todo. Además, cada pedido a la tienda
@@ -52,15 +52,15 @@ class Vencimientos
         $nuevos = 0;
 
         foreach ($this->compras->pagadasConComprador() as $compra) {
-            $fecha = new DateTimeImmutable($compra['fecha']);
-            $recordatorio = Compra::recordatorioDeHoy($fecha, $ahora);
+            $retirarHasta = new DateTimeImmutable($compra['retirar_hasta']);
+            $recordatorio = Compra::recordatorioDeHoy(new DateTimeImmutable($compra['fecha']), $retirarHasta, $ahora);
             if ($recordatorio === null) {
                 continue;
             }
 
             $mensaje = $recordatorio === 'dia2'
-                ? Compra::mensajeDia2($compra['nombre'], $compra['numero'], $fecha)
-                : Compra::mensajeDia4($compra['nombre'], $compra['numero'], $fecha);
+                ? Compra::mensajeDia2($compra['nombre'], $compra['numero'], $retirarHasta)
+                : Compra::mensajeDia4($compra['nombre'], $compra['numero'], $retirarHasta);
 
             if (Avisos::mandar((int) $compra['cliente_id'], $mensaje, "compra-{$compra['numero']}-$recordatorio", $ahora)) {
                 $nuevos++;
@@ -86,17 +86,17 @@ class Vencimientos
     }
 
     // El aviso de una compra pagada que se canceló, si corresponde hoy. Devuelve true si es nuevo.
-    // - Venció el plazo de retiro: el día de la cancelación, desde las 9:00.
+    // - Venció el plazo de retiro: el día de la cancelación, desde la hora de los avisos.
     // - La canceló el comprador: el mismo día que la canceló, a cualquier hora.
     private function avisarCancelacion(array $compra, DateTimeImmutable $ahora): bool
     {
-        $fecha = new DateTimeImmutable($compra['fecha']);
+        $retirarHasta = new DateTimeImmutable($compra['retirar_hasta']);
 
         if ($compra['motivo_cancelacion'] === 'VENCIDA') {
-            if (!Compra::avisoDeCancelacionHoy($fecha, $ahora)) {
+            if (!Compra::avisoDeCancelacionHoy($retirarHasta, $ahora)) {
                 return false;
             }
-            $mensaje = Compra::mensajeCancelada($compra['nombre'], $compra['numero'], $fecha);
+            $mensaje = Compra::mensajeCancelada($compra['nombre'], $compra['numero'], $retirarHasta);
             $id = "compra-{$compra['numero']}-cancelada";
         } else {
             if (substr((string) $compra['cancelada_en'], 0, 10) !== $ahora->format('Y-m-d')) {

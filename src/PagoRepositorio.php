@@ -9,7 +9,7 @@ class PagoRepositorio extends CompraRepositorio
     public function paraPagar(string $numero, int $compradorId): ?array
     {
         $consulta = $this->db->prepare(
-            "SELECT f.id, f.numero, f.estado, DATE_FORMAT(f.fecha, '%Y-%m-%d %H:%i:%s') AS fecha, f.total, c.cliente_id
+            "SELECT f.id, f.numero, f.estado, DATE_FORMAT(f.fecha, '%Y-%m-%d %H:%i:%s') AS fecha, DATE_FORMAT(COALESCE(f.pagar_antes_de, f.fecha + INTERVAL 15 MINUTE), '%Y-%m-%d %H:%i:%s') AS pagar_antes_de, DATE_FORMAT(COALESCE(f.retirar_hasta, DATE(f.fecha) + INTERVAL (CASE WEEKDAY(f.fecha) WHEN 5 THEN 6 WHEN 6 THEN 5 ELSE 7 END) DAY), '%Y-%m-%d') AS retirar_hasta, f.total, c.cliente_id
              FROM factura_compra f JOIN carrito c ON c.id = f.carrito_id
              WHERE f.numero = ?"
         );

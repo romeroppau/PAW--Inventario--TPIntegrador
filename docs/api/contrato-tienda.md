@@ -68,10 +68,21 @@ El precio de cada producto se copia **al agregarlo al carrito** (`precio_unitari
 
 | Plazo | Desde | Si se vence |
 |---|---|---|
-| **15 minutos para pagar** | La confirmación | La compra se cancela, el stock vuelve y el carrito se descarta |
-| **5 días hábiles para retirar** (lunes a viernes, sin contar feriados), hasta el último día inclusive | La confirmación | La compra se cancela **sin devolución del importe** y el stock vuelve |
+| **15 minutos para pagar** (configurable) | La confirmación | La compra se cancela, el stock vuelve y el carrito se descarta |
+| **5 días hábiles para retirar** (configurable; lunes a viernes, sin contar feriados), hasta el último día inclusive | La confirmación | La compra se cancela **sin devolución del importe** y el stock vuelve |
 
 Por ejemplo, una compra confirmada el miércoles 18/11 se puede retirar hasta el miércoles 25/11 inclusive.
+
+**Los plazos los configura la veterinaria** desde su panel (configuración, grupo "Tienda"; catálogo en Backend, `CatalogoConfiguracion.php`). Lo de arriba son los valores por defecto:
+
+| Parámetro (`configuracion`) | Por defecto | Rango |
+|---|---|---|
+| `minutos_para_pagar` | 15 | 5 a 60 minutos |
+| `dias_habiles_para_retirar` | 5 | 2 a 15 días hábiles |
+| `hora_avisos_tienda` | 09:00 | 07:00 a 20:00 (desde esta hora salen los recordatorios y se cancelan los pedidos no retirados) |
+| `dia_primer_recordatorio` | 2 | 1 a 13 (al menos 2 días hábiles antes del último día) |
+
+**Cada compra guarda sus plazos al confirmarse** (`factura_compra.pagar_antes_de` y `retirar_hasta`, migración 015). Un cambio en la configuración vale solo para las compras **nuevas**: a las que ya existen no se les cambia lo prometido. Si una compra no los tiene guardados (anterior a la migración), se calculan con los valores por defecto. La hora de los avisos y el día del primer recordatorio se leen al momento de mandar cada aviso.
 
 **Política de cancelación** (se muestra al confirmar la compra y en el primer recordatorio): *tenés 5 días hábiles desde la compra para retirar tu pedido en el local. Si no lo retirás en ese plazo, el pedido se cancela y el importe no se reintegra. Si cancelás un pedido ya pagado, el importe tampoco se reintegra.*
 
@@ -123,6 +134,7 @@ El carrito abierto del comprador. Si todavía no tiene uno, responde un carrito 
   ],
   "total": 31999.80,
   "minutos_para_pagar": 15,
+  "dias_habiles_para_retirar": 5,
   "retirar_hasta_si_compra_hoy": "2026-11-25"
 }
 ```
@@ -130,7 +142,7 @@ El carrito abierto del comprador. Si todavía no tiene uno, responde un carrito 
 - `stock`: lo que hay disponible hoy, para que la pantalla no ofrezca más.
 - `a_la_venta`: `false` si el producto se dio de baja o venció después de agregarlo. La pantalla avisa que hay que quitarlo: así no se puede confirmar.
 - `tiene_imagen`: si el producto tiene foto. La foto se pide aparte, con `GET /api/tienda/productos/{id}/imagen`.
-- `minutos_para_pagar` y `retirar_hasta_si_compra_hoy`: para explicar los plazos antes de pagar ("tenés 15 minutos para pagar" y "retirás hasta el miércoles 25/11"). Vienen también con el carrito vacío.
+- `minutos_para_pagar`, `dias_habiles_para_retirar` y `retirar_hasta_si_compra_hoy` (con la configuración de hoy): para explicar los plazos antes de pagar ("tenés 15 minutos para pagar" y "retirás hasta el miércoles 25/11"). Vienen también con el carrito vacío.
 
 ## GET /api/tienda/productos/{id}/imagen
 
@@ -257,6 +269,7 @@ Mis compras, de la más nueva a la más vieja (las canceladas también).
 
 - `pagar_antes_de`: solo en `PENDIENTE_PAGO`; en los demás estados, `null`.
 - `motivo_cancelacion`: solo en `CANCELADA` (si no, `null`): `COMPRADOR` (la canceló el comprador, antes o después de pagar), `SIN_PAGO` (no se pagó en 15 minutos) o `VENCIDA` (venció el plazo de retiro). Texto sugerido: "La canceló el comprador", "No se pagó a tiempo", "Venció el plazo de retiro".
+- `dias_habiles_para_retirar`: los días hábiles de plazo que tuvo esta compra (para el texto de la política).
 - `segundos_para_pagar`: solo en `PENDIENTE_PAGO` (si no, `null`): cuántos segundos faltan para que venza, contados por el servidor. La cuenta regresiva de la pantalla parte de este número, así no depende del reloj de la computadora del comprador.
 - `retirar_hasta`: en `PENDIENTE_PAGO` y `PAGADA`; en los demás estados, `null`.
 
@@ -436,8 +449,8 @@ Si Backend no responde, la compra sigue igual: el aviso no frena la venta (el er
 
 | Cuándo | `id_operacion` | Mensaje (ejemplo) |
 |---|---|---|
-| Día hábil 2 de una compra `PAGADA` | `compra-V-000003-dia2` | 🐾 ¡Hola, Ana! Tu pedido V-000003 ya te está esperando en HuellaVet. Podés pasar a buscarlo hasta el miércoles 25/11 inclusive. ¡Te esperamos! 🛍️ Política de cancelación: si no lo retirás en ese plazo, el pedido se cancela y el importe no se reintegra. |
-| Día hábil 4 | `compra-V-000003-dia4` | ⏰ ¡Hola, Ana! Te recordamos que mañana (25/11) es el último día para retirar tu pedido V-000003. Pasado ese día, el pedido se cancela y el importe no se reintegra. |
+| Primer recordatorio: el día hábil configurado (por defecto, el 2) de una compra `PAGADA` | `compra-V-000003-dia2` | 🐾 ¡Hola, Ana! Tu pedido V-000003 ya te está esperando en HuellaVet. Podés pasar a buscarlo hasta el miércoles 25/11 inclusive. ¡Te esperamos! 🛍️ Política de cancelación: si no lo retirás en ese plazo, el pedido se cancela y el importe no se reintegra. |
+| Último recordatorio: el día hábil anterior al último día para retirar | `compra-V-000003-dia4` | ⏰ ¡Hola, Ana! Te recordamos que el miércoles 25/11 es el último día para retirar tu pedido V-000003. Pasado ese día, el pedido se cancela y el importe no se reintegra. |
 | Cuando el comprador cancela un pedido pagado (enseguida; si falla, la tarea lo reintenta ese día) | `compra-V-000003-cancelada-por-cliente` | Hola, Ana. Cancelaste tu pedido V-000003 y los productos volvieron a la tienda. Como indica la política de cancelación, el importe no se reintegra. Si tenés alguna duda, escribinos. ¡Te esperamos pronto en HuellaVet! 🐾 |
 | Al cancelarse por vencimiento | `compra-V-000003-cancelada` | Hola, Ana. Tu pedido V-000003 se canceló porque venció el plazo de retiro (25/11). Como te avisamos, el importe no se reintegra. Si tenés alguna duda, escribinos. 🐾 |
 

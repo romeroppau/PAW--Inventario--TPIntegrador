@@ -25,12 +25,12 @@ class AvisosDeCompra
         if ($compra === null) {
             return;
         }
-        $fecha = new DateTimeImmutable($compra['fecha']);
+        $retirarHasta = new DateTimeImmutable($compra['retirar_hasta']);
         $ahora = new DateTimeImmutable();
 
-        Avisos::mandar((int) $compra['cliente_id'], Compra::mensajePagada($compra['nombre'], $numero, $fecha), "compra-$numero-pagada", $ahora);
+        Avisos::mandar((int) $compra['cliente_id'], Compra::mensajePagada($compra['nombre'], $numero, $retirarHasta), "compra-$numero-pagada", $ahora);
 
-        $mensaje = Compra::mensajeNuevoPedido($compra['nombre'], $numero, (float) $compra['total'], $fecha);
+        $mensaje = Compra::mensajeNuevoPedido($compra['nombre'], $numero, (float) $compra['total'], $retirarHasta);
         foreach ($this->compras->veterinarias() as $veterinariaId) {
             Avisos::mandar($veterinariaId, $mensaje, "compra-$numero-pagada-vet-$veterinariaId", $ahora, Avisos::SOLO_CAMPANA);
         }

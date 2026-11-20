@@ -71,7 +71,8 @@ class CarritoRepositorio
     private static function plazos(): array
     {
         return [
-            'minutos_para_pagar' => Compra::MINUTOS_PARA_PAGAR,
+            'minutos_para_pagar' => Compra::minutosParaPagar(),
+            'dias_habiles_para_retirar' => Compra::diasHabilesParaRetirar(),
             'retirar_hasta_si_compra_hoy' => Compra::retirarHasta(new DateTimeImmutable())->format('Y-m-d'),
         ];
     }
