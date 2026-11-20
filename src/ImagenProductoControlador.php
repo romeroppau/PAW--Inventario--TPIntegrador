@@ -16,7 +16,7 @@ class ImagenProductoControlador
             return;
         }
 
-        $consulta = Database::conectar()->prepare('SELECT imagen, imagen_tipo FROM producto WHERE id = ? AND imagen IS NOT NULL');
+        $consulta = Database::conectar()->prepare('SELECT imagen, imagen_tipo FROM producto WHERE id = ? AND imagen IS NOT NULL AND LENGTH(imagen) > 0');
         $consulta->execute([(int) $id]);
         $fila = $consulta->fetch();
 

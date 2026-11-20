@@ -37,7 +37,7 @@ class CarritoRepositorio
 
         $consulta = $this->db->prepare(
             'SELECT i.producto_id, p.nombre, i.precio_unitario, i.cantidad, p.stock,
-                    (' . self::A_LA_VENTA . ') AS a_la_venta, (p.imagen IS NOT NULL) AS tiene_imagen
+                    (' . self::A_LA_VENTA . ') AS a_la_venta, (p.imagen IS NOT NULL AND LENGTH(p.imagen) > 0) AS tiene_imagen
              FROM item_carrito i
              JOIN producto p ON p.id = i.producto_id
              WHERE i.carrito_id = ?
