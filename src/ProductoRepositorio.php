@@ -14,6 +14,14 @@ class ProductoRepositorio
     // Un producto se ve en la tienda si está activo y no está vencido.
     private const VISIBLE_EN_TIENDA = 'activo = 1 AND (fecha_vencimiento IS NULL OR fecha_vencimiento >= CURDATE())';
 
+    // Las columnas de la tienda: las de siempre y la promoción vigente, si tiene (migración 016).
+    // Van con "p." porque la consulta también trae la tabla promocion (que tiene su propio id).
+    private const COLUMNAS_TIENDA = "p.id, p.nombre, p.categoria, p.especie_destino AS especie, p.precio,
+                                     p.fecha_vencimiento AS vencimiento, p.stock > 0 AS disponible,
+                                     pr.porcentaje AS promocion_porcentaje,
+                                     DATE_FORMAT(pr.hasta, '%Y-%m-%d') AS promocion_hasta,
+                                     " . Promocion::PRECIO_FINAL . " AS promocion_precio";
+
     // Recibe la conexión de afuera (Database::conectar() en la aplicación), así las pruebas pueden usar otra base.
     // MySQL trabaja en UTC: se le indica la hora de Argentina (sin horario de verano, siempre -03:00),
     // así las fechas de los movimientos y el CURDATE() de los vencimientos son los de acá.
@@ -58,9 +66,10 @@ class ProductoRepositorio
         // LIMIT y OFFSET son enteros calculados acá (nunca texto del usuario), por eso se pueden escribir en el SQL.
         $desde = ($pagina - 1) * $porPagina;
         $consulta = $this->db->prepare(
-            'SELECT ' . self::COLUMNAS . ", stock > 0 AS disponible
-             FROM producto WHERE $where
-             ORDER BY nombre, id
+            'SELECT ' . self::COLUMNAS_TIENDA . '
+             FROM producto p ' . Promocion::JOIN_VIGENTE . "
+             WHERE $where
+             ORDER BY p.nombre, p.id
              LIMIT $porPagina OFFSET $desde"
         );
         $consulta->execute($parametros);
@@ -72,13 +81,28 @@ class ProductoRepositorio
     public function buscarEnTienda(int $id): ?array
     {
         $consulta = $this->db->prepare(
-            'SELECT ' . self::COLUMNAS . ', descripcion, stock > 0 AS disponible, imagen, imagen_tipo
-             FROM producto WHERE id = ? AND ' . self::VISIBLE_EN_TIENDA
+            'SELECT ' . self::COLUMNAS_TIENDA . ', p.descripcion, p.imagen, p.imagen_tipo
+             FROM producto p ' . Promocion::JOIN_VIGENTE . '
+             WHERE p.id = ? AND ' . self::VISIBLE_EN_TIENDA
         );
         $consulta->execute([$id]);
         $fila = $consulta->fetch();
 
         return $fila === false ? null : $this->formatear($fila);
+    }
+
+    // Los productos en promoción que se pueden comprar (con stock), el descuento más grande primero.
+    // Es la sección "Promociones" de la tienda: son pocos, así que no se pagina.
+    public function enPromocion(): array
+    {
+        $consulta = $this->db->query(
+            'SELECT ' . self::COLUMNAS_TIENDA . '
+             FROM producto p JOIN promocion pr ON pr.producto_id = p.id AND pr.terminada_en IS NULL AND pr.hasta >= CURDATE()
+             WHERE p.stock > 0 AND ' . self::VISIBLE_EN_TIENDA . '
+             ORDER BY pr.porcentaje DESC, p.nombre, p.id'
+        );
+
+        return array_map([$this, 'formatear'], $consulta->fetchAll());
     }
 
     // ---------- Panel del veterinario ----------
@@ -292,6 +316,14 @@ class ProductoRepositorio
         }
         if (array_key_exists('imagen', $fila)) {
             $producto['imagen'] = Imagen::aDataUrl($fila['imagen'], $fila['imagen_tipo']);
+        }
+        // En la tienda: la promoción vigente ({porcentaje, precio con descuento, hasta}) o null.
+        if (array_key_exists('promocion_porcentaje', $fila)) {
+            $producto['promocion'] = $fila['promocion_porcentaje'] === null ? null : [
+                'porcentaje' => (int) $fila['promocion_porcentaje'],
+                'precio' => (float) $fila['promocion_precio'],
+                'hasta' => $fila['promocion_hasta'],
+            ];
         }
 
         return $producto;

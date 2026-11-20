@@ -5,6 +5,8 @@
 // - Armar el carrito no toca el stock: solo se controla que no se pida más de lo que hay.
 // - Un comprador tiene un solo carrito ABIERTO a la vez: lo asegura la base (índice único sobre la
 //   columna calculada "abierto").
+// - El carrito muestra siempre el precio de HOY de cada producto, con la promoción vigente si tiene
+//   (Promocion::PRECIO_FINAL). La compra cobra ese mismo precio y lo guarda (CompraRepositorio::confirmar).
 class CarritoRepositorio
 {
     // Un producto está a la venta si está activo y no vencido (la misma regla que el catálogo,
@@ -36,10 +38,12 @@ class CarritoRepositorio
         }
 
         $consulta = $this->db->prepare(
-            'SELECT i.producto_id, p.nombre, i.precio_unitario, i.cantidad, p.stock,
+            'SELECT i.producto_id, p.nombre, ' . Promocion::PRECIO_FINAL . ' AS precio_unitario, p.precio AS precio_lista,
+                    pr.porcentaje AS promocion_porcentaje, i.cantidad, p.stock,
                     (' . self::A_LA_VENTA . ') AS a_la_venta, (p.imagen IS NOT NULL AND LENGTH(p.imagen) > 0) AS tiene_imagen
              FROM item_carrito i
              JOIN producto p ON p.id = i.producto_id
+             ' . Promocion::JOIN_VIGENTE . '
              WHERE i.carrito_id = ?
              ORDER BY i.id'
         );
@@ -54,6 +58,9 @@ class CarritoRepositorio
                 'producto_id' => (int) $fila['producto_id'],
                 'nombre' => $fila['nombre'],
                 'precio_unitario' => (float) $fila['precio_unitario'],
+                // Con promoción: el precio sin descuento y el porcentaje (si no, null y null).
+                'precio_sin_descuento' => $fila['promocion_porcentaje'] === null ? null : (float) $fila['precio_lista'],
+                'descuento' => $fila['promocion_porcentaje'] === null ? null : (int) $fila['promocion_porcentaje'],
                 'cantidad' => (int) $fila['cantidad'],
                 'subtotal' => $subtotal,
                 'stock' => (int) $fila['stock'],
@@ -77,7 +84,8 @@ class CarritoRepositorio
         ];
     }
 
-    // Agrega un producto (si ya estaba, suma la cantidad; el precio queda el de la primera vez).
+    // Agrega un producto (si ya estaba, suma la cantidad). Guarda el precio de hoy, con la promoción
+    // si tiene; de todos modos el carrito y la compra usan el precio del momento.
     // Devuelve 'ok', 'no_a_la_venta' o ['stock_insuficiente', stock].
     public function agregar(int $compradorId, int $productoId, int $cantidad): string|array
     {
@@ -141,10 +149,13 @@ class CarritoRepositorio
 
     // ---------- Ayudas ----------
 
-    // El precio y el stock de un producto, o null si no está a la venta.
+    // El precio de hoy (con la promoción, si tiene) y el stock de un producto, o null si no está a la venta.
     private function productoALaVenta(int $productoId): ?array
     {
-        $consulta = $this->db->prepare('SELECT p.precio, p.stock FROM producto p WHERE p.id = ? AND ' . self::A_LA_VENTA);
+        $consulta = $this->db->prepare(
+            'SELECT ' . Promocion::PRECIO_FINAL . ' AS precio, p.stock FROM producto p ' . Promocion::JOIN_VIGENTE
+            . ' WHERE p.id = ? AND ' . self::A_LA_VENTA
+        );
         $consulta->execute([$productoId]);
         $fila = $consulta->fetch();
 
