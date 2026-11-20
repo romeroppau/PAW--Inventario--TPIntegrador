@@ -36,6 +36,10 @@ Toca "Ir a pagar" (confirmar)                                        → factura
 | `GET /api/inventario/compras` | Veterinario | Pedidos para retirar, entregados y cancelados, con buscador |
 | `POST /api/tienda/compras/{numero}/entregada` | Veterinario | Constatar el retiro en el local |
 | `POST /api/tienda/tareas/vencer` | GitHub Actions | Cancelar las compras vencidas y mandar los recordatorios |
+| `GET /api/tienda/promociones` | Público | Los productos en promoción (sección "Promociones" de la tienda) |
+| `GET /api/inventario/promociones` | Veterinario | Las promociones vigentes |
+| `POST /api/inventario/promociones` | Veterinario | "Publicitar": poner un descuento a un producto |
+| `DELETE /api/inventario/promociones/{id}` | Veterinario | Terminar una promoción |
 
 **Comprador** = un usuario con rol `CLIENTE` o `RESCATISTA` (cualquier rescatista, aunque todavía no esté aprobado: la aprobación es para publicar en adopciones, no para comprar).
 
@@ -62,7 +66,9 @@ Los mismos que se ven en el catálogo: **activos y no vencidos**. Si un producto
 
 ### Precios
 
-El precio de cada producto se copia **al agregarlo al carrito** (`precio_unitario`). El total lo calcula siempre el servidor.
+El carrito muestra siempre el **precio de hoy** de cada producto, con el descuento de su promoción si tiene una vigente (ver "Promociones"). Al confirmar se cobra ese mismo precio, y cada ítem de la compra lo guarda (`precio_unitario`): la factura no cambia aunque después cambie el precio del producto o termine la promoción. El total lo calcula siempre el servidor.
+
+(Hasta la Entrega 5 el precio se copiaba al agregar el producto y quedaba fijo. Se cambió con las promociones: si no, un producto agregado durante una promoción se seguía cobrando con descuento después de que terminaba.)
 
 ### Plazos
 
@@ -125,6 +131,8 @@ El carrito abierto del comprador. Si todavía no tiene uno, responde un carrito 
       "producto_id": 101,
       "nombre": "Alimento cachorro 3 kg",
       "precio_unitario": 15999.90,
+      "precio_sin_descuento": null,
+      "descuento": null,
       "cantidad": 2,
       "subtotal": 31999.80,
       "stock": 20,
@@ -139,6 +147,8 @@ El carrito abierto del comprador. Si todavía no tiene uno, responde un carrito 
 }
 ```
 
+- `precio_unitario`: el precio de hoy, con el descuento si el producto está en promoción.
+- `precio_sin_descuento` y `descuento`: si está en promoción, el precio sin descuento y el porcentaje (para mostrarlo tachado); si no, `null`.
 - `stock`: lo que hay disponible hoy, para que la pantalla no ofrezca más.
 - `a_la_venta`: `false` si el producto se dio de baja o venció después de agregarlo. La pantalla avisa que hay que quitarlo: así no se puede confirmar.
 - `tiene_imagen`: si el producto tiene foto. La foto se pide aparte, con `GET /api/tienda/productos/{id}/imagen`.
@@ -154,7 +164,7 @@ Público. La foto de un producto **como imagen** (no dentro de un JSON), para us
 
 ## POST /api/tienda/carrito/items
 
-Agrega un producto al carrito. Si el comprador no tenía carrito abierto, se crea. Si el producto ya estaba, se suma la cantidad (el precio queda el de la primera vez).
+Agrega un producto al carrito. Si el comprador no tenía carrito abierto, se crea. Si el producto ya estaba, se suma la cantidad. El precio es siempre el de hoy (ver "Precios").
 
 **Pedido:**
 
@@ -431,6 +441,97 @@ Las cancelaciones por falta de pago salen a cualquier hora. Las de vencimiento d
 `avisos` cuenta los avisos nuevos de esta corrida (los que ya se habían mandado no se cuentan).
 
 **Errores:** `401` sin el token o con otro.
+
+## Promociones
+
+La veterinaria pone un descuento a un producto desde las sugerencias de Reportes ("Qué liquidar" → **Publicitar**): el producto aparece en la sección **Promociones** de la tienda y en el catálogo con el precio rebajado, y el carrito y la compra cobran ese precio. Tabla `promocion` (migración 016).
+
+- El descuento es un **porcentaje entero de 5 a 90**. El precio con descuento se calcula con el precio del producto de ese momento, redondeado a centavos.
+- Dura **hasta el día `hasta` inclusive**: desde hoy, como mucho 90 días y nunca después del vencimiento del producto.
+- **Una sola promoción vigente por producto.** Para cambiarla, se termina y se publica otra.
+- Vigente = no se terminó y `hasta` es hoy o después. Si el producto se da de baja, vence o se queda sin stock, la promoción sigue vigente pero no aparece en la sección de promociones (en el catálogo, sin stock se ve como siempre: sin "Agregar").
+- Las promociones no se borran: terminar una guarda cuándo.
+
+### GET /api/tienda/promociones
+
+Público. Los productos en promoción que se pueden comprar (activos, no vencidos y con stock), del descuento más grande al más chico. Mismo formato que el catálogo (`contrato.md`), sin paginar.
+
+**200 OK:**
+
+```json
+{
+  "datos": [
+    {
+      "id": 105,
+      "nombre": "Antiparasitario gatos",
+      "categoria": "MEDICAMENTO",
+      "especie": "GATO",
+      "precio": 9800.00,
+      "vencimiento": "2026-12-10",
+      "disponible": true,
+      "promocion": { "porcentaje": 30, "precio": 6860.00, "hasta": "2026-12-10" }
+    }
+  ]
+}
+```
+
+### GET /api/inventario/promociones
+
+Veterinario. Las promociones vigentes, de la que termina antes a la que termina después.
+
+**200 OK:**
+
+```json
+{
+  "datos": [
+    {
+      "id": 3,
+      "producto_id": 105,
+      "nombre": "Antiparasitario gatos",
+      "precio": 9800.00,
+      "porcentaje": 30,
+      "precio_promocion": 6860.00,
+      "hasta": "2026-12-10",
+      "stock": 4,
+      "vencimiento": "2026-12-10",
+      "a_la_venta": true,
+      "creada_en": "2026-11-20 18:05:00",
+      "creada_por": "Vet"
+    }
+  ]
+}
+```
+
+`a_la_venta`: `false` si el producto se dio de baja o venció (la promoción no se ve en la tienda).
+
+### POST /api/inventario/promociones
+
+Veterinario, con CSRF. "Publicitar".
+
+**Pedido:**
+
+```json
+{ "producto_id": 105, "porcentaje": 30, "hasta": "2026-12-10" }
+```
+
+**201 Created:** la promoción, con el formato de `GET /api/inventario/promociones`.
+
+**Errores:**
+
+- `400 { "error": "Datos inválidos", "campos": { … } }`:
+  - `porcentaje`: "El descuento tiene que ser un número entero entre 5 y 90 (por ciento)";
+  - `hasta`: "Elegí hasta qué día dura la promoción", "La promoción no puede terminar antes de hoy", "La promoción puede durar como mucho 90 días (hasta el dd/mm/aaaa)" o "El producto vence el dd/mm/aaaa: la promoción no puede durar más que eso".
+- `404 { "error": "Producto no encontrado" }`.
+- `409 { "error": "El producto no está a la venta (está dado de baja o vencido)" }`.
+- `409 { "error": "Este producto ya tiene una promoción del 30 % hasta el 10/12/2026. Terminala para publicar otra.", "promocion_id": 3 }`.
+
+### DELETE /api/inventario/promociones/{id}
+
+Veterinario, con CSRF. Termina la promoción ahora: deja de verse en la tienda y el carrito vuelve al precio sin descuento.
+
+**204 No Content.** **Errores:** `404 { "error": "No hay una promoción vigente con ese número" }` (no existe, ya terminó o ya pasó su fecha).
+
+---
 
 ## Avisos al comprador y a la veterinaria
 

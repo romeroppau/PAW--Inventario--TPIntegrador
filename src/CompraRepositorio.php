@@ -81,7 +81,11 @@ class CompraRepositorio
             $this->db->prepare('UPDATE factura_compra SET numero = ? WHERE id = ?')->execute([$numero, $facturaId]);
 
             // La reserva del stock, con su movimiento (un id_operacion por producto: nunca se repite).
+            // Cada ítem guarda el precio que se cobró: la factura lo muestra aunque después cambie el
+            // precio del producto o termine la promoción.
             foreach ($items as $item) {
+                $this->db->prepare('UPDATE item_carrito SET precio_unitario = ? WHERE carrito_id = ? AND producto_id = ?')
+                    ->execute([number_format($item['precio_unitario'], 2, '.', ''), $carritoId, $item['producto_id']]);
                 $this->db->prepare('UPDATE producto SET stock = stock - ? WHERE id = ?')
                     ->execute([$item['cantidad'], $item['producto_id']]);
                 $this->registrarMovimiento($item['producto_id'], 'SALIDA', 'VENTA', $item['cantidad'], $compradorId, "venta-$numero-{$item['producto_id']}");
@@ -420,14 +424,17 @@ class CompraRepositorio
     }
 
     // Los ítems del carrito con su producto, bloqueando los productos (para confirmar).
+    // El precio es el de hoy, con la promoción vigente si tiene (el mismo que mostró el carrito).
     private function itemsParaConfirmar(int $carritoId): array
     {
         $consulta = $this->db->prepare(
-            'SELECT i.producto_id, p.nombre, i.cantidad, i.precio_unitario, p.stock, (' . self::A_LA_VENTA . ') AS a_la_venta
+            'SELECT i.producto_id, p.nombre, i.cantidad, ' . Promocion::PRECIO_FINAL . ' AS precio_unitario, p.stock,
+                    (' . self::A_LA_VENTA . ') AS a_la_venta
              FROM item_carrito i JOIN producto p ON p.id = i.producto_id
+             ' . Promocion::JOIN_VIGENTE . '
              WHERE i.carrito_id = ?
              ORDER BY i.producto_id
-             FOR UPDATE'
+             FOR UPDATE OF i, p'
         );
         $consulta->execute([$carritoId]);
 

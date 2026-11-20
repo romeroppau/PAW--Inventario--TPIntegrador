@@ -139,7 +139,8 @@ Cada página trae hasta **12** productos. Si una página no tiene resultados, `d
       "especie": "PERRO",
       "precio": 8500.00,
       "vencimiento": null,
-      "disponible": true
+      "disponible": true,
+      "promocion": { "porcentaje": 30, "precio": 5950.00, "hasta": "2026-12-10" }
     }
   ],
   "pagina": 1,
@@ -149,6 +150,8 @@ Cada página trae hasta **12** productos. Si una página no tiene resultados, `d
 ```
 
 `total` es la cantidad de productos que cumplen los filtros, sumando todas las páginas.
+
+`promocion` (Entrega 5): la promoción vigente del producto, o `null` si no tiene. `precio` sigue siendo el precio sin descuento; `promocion.precio` es el que se cobra (redondeado a centavos) y `promocion.hasta`, el último día. Ver `contrato-tienda.md`, sección "Promociones".
 
 ---
 
@@ -168,6 +171,7 @@ Detalle público de un producto, con descripción e imagen.
   "precio": 8500.00,
   "vencimiento": null,
   "disponible": true,
+  "promocion": null,
   "imagen": "data:image/jpeg;base64,/9j/4AAQSkZJRg..."
 }
 ```
