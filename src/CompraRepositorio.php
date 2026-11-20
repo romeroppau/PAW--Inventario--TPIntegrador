@@ -126,6 +126,28 @@ class CompraRepositorio
         return $compra;
     }
 
+    // ---------- Para los avisos ----------
+
+    // El comprador de una compra, con lo que necesitan los avisos: ['cliente_id', 'nombre', 'fecha', 'total'] o null.
+    public function comprador(string $numero): ?array
+    {
+        $consulta = $this->db->prepare(
+            "SELECT c.cliente_id, u.nombre, DATE_FORMAT(f.fecha, '%Y-%m-%d %H:%i:%s') AS fecha, f.total
+             FROM factura_compra f JOIN carrito c ON c.id = f.carrito_id JOIN usuario u ON u.id = c.cliente_id
+             WHERE f.numero = ?"
+        );
+        $consulta->execute([$numero]);
+        $fila = $consulta->fetch();
+
+        return $fila === false ? null : $fila;
+    }
+
+    // Los ids de todas las veterinarias (rol VETERINARIO): reciben el aviso de cada pedido pagado.
+    public function veterinarias(): array
+    {
+        return array_map('intval', $this->db->query("SELECT id FROM usuario WHERE rol = 'VETERINARIO' ORDER BY id")->fetchAll(PDO::FETCH_COLUMN));
+    }
+
     // ---------- Veterinaria ----------
 
     // Pedidos de una pestaña de la veterinaria (PAGADA, ENTREGADA o CANCELADA), con el comprador y
