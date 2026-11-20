@@ -19,16 +19,20 @@ class TareaControlador
         }
 
         $ahora = new DateTimeImmutable();
-        $vencimientos = new Vencimientos(new CompraRepositorio(Database::conectar()));
+        $compras = new CompraRepositorio(Database::conectar());
+        $vencimientos = new Vencimientos($compras);
 
         // Primero las cancelaciones: así el aviso de cancelación sale en la misma corrida.
         $canceladas = $vencimientos->cancelarVencidas($ahora);
         $avisos = $vencimientos->mandarAvisos($ahora);
+        // Los reintegros que Mercado Pago no pudo hacer al cancelar.
+        $reintegros = (new Reintegros($compras))->hacerPendientes();
 
         Response::json([
             'canceladas_sin_pago' => $canceladas['sin_pago'],
             'canceladas_vencidas' => $canceladas['sin_retirar'],
             'avisos' => $avisos,
+            'reintegros' => $reintegros,
         ]);
     }
 }

@@ -141,12 +141,51 @@ class CompraTest extends TestCase
         $this->assertStringNotContainsString("\n", $vencido . $yaPagado . $otro);
     }
 
-    public function testElAvisoDeQueElCompradorCanceloDiceQueNoSeReintegra(): void
+    // ---------- Reintegro al cancelar un pedido pagado ----------
+
+    public function testConAnticipacionEsHasta48HorasAntesDelFinalDelUltimoDia(): void
     {
-        $mensaje = Compra::mensajeCanceladaPorComprador('Ana Pérez', 'V-000010');
+        // Último día el miércoles 25: termina el miércoles a las 24:00; 48 horas antes, el lunes 23 a las 24:00.
+        $retirarHasta = $this->fecha('2026-11-25');
+
+        $this->assertEquals($this->fecha('2026-11-23 23:59:59'), Compra::reintegroMayorHasta($retirarHasta, 48));
+        // Con 24 horas: hasta el martes 24 a las 23:59:59.
+        $this->assertEquals($this->fecha('2026-11-24 23:59:59'), Compra::reintegroMayorHasta($retirarHasta, 24));
+    }
+
+    public function testCancelarAntesDevuelveMasQueCancelarAUltimoMomento(): void
+    {
+        $retirarHasta = $this->fecha('2026-11-25');
+
+        $this->assertSame(75, Compra::porcentajeDeReintegro($retirarHasta, $this->fecha('2026-11-20 10:00:00'), 75, 50, 48));
+        $this->assertSame(75, Compra::porcentajeDeReintegro($retirarHasta, $this->fecha('2026-11-23 23:59:59'), 75, 50, 48));
+        $this->assertSame(50, Compra::porcentajeDeReintegro($retirarHasta, $this->fecha('2026-11-24 00:00:00'), 75, 50, 48));
+        $this->assertSame(50, Compra::porcentajeDeReintegro($retirarHasta, $this->fecha('2026-11-25 18:00:00'), 75, 50, 48));
+        // Con 24 horas, el martes todavía es "con anticipación".
+        $this->assertSame(75, Compra::porcentajeDeReintegro($retirarHasta, $this->fecha('2026-11-24 12:00:00'), 75, 50, 24));
+    }
+
+    public function testElMontoEsElPorcentajeDelTotalConCentavos(): void
+    {
+        $this->assertSame(23999.85, Compra::montoDeReintegro(31999.8, 75));
+        $this->assertSame(15999.9, Compra::montoDeReintegro(31999.8, 50));
+        $this->assertSame(0.0, Compra::montoDeReintegro(31999.8, 0));
+    }
+
+    public function testSinConfiguracionLaPoliticaEs75Y50Con48Horas(): void
+    {
+        $this->assertSame(['anticipado' => 75, 'ultimo_momento' => 50, 'horas' => 48], Compra::politicaDeReintegro());
+    }
+
+    public function testElAvisoDeQueElCompradorCanceloDiceCuantoSeLeDevuelve(): void
+    {
+        $mensaje = Compra::mensajeCanceladaPorComprador('Ana Pérez', 'V-000010', 23999.85, 75);
 
         $this->assertStringStartsWith('Hola, Ana. Cancelaste tu pedido V-000010', $mensaje);
-        $this->assertStringContainsString('el importe no se reintegra', $mensaje);
+        $this->assertStringContainsString('Te devolvemos $ 23.999,85 (el 75 % de lo que pagaste) a tu medio de pago', $mensaje);
         $this->assertStringNotContainsString("\n", $mensaje);
+
+        // Si la veterinaria configuró 0 %: no se reintegra.
+        $this->assertStringContainsString('el importe no se reintegra', Compra::mensajeCanceladaPorComprador('Ana Pérez', 'V-000010', 0, 0));
     }
 }

@@ -4,7 +4,7 @@
 // "POST /api/tienda/tareas/vencer" y "Avisos al comprador"):
 // - cancela las compras sin pagar que pasaron su tiempo para pagar (a cualquier hora);
 // - cancela las pagadas que pasaron su plazo de retiro (desde la hora de los avisos del día siguiente),
-//   sin devolución; en los dos casos el stock vuelve;
+//   sin reintegro; en los dos casos el stock vuelve;
 // - manda el primer y el último recordatorio, y el aviso de cancelación (desde la hora de los avisos);
 // - reintenta el aviso de los pedidos pagados que canceló el comprador (sale enseguida al cancelar).
 //
@@ -102,7 +102,9 @@ class Vencimientos
             if (substr((string) $compra['cancelada_en'], 0, 10) !== $ahora->format('Y-m-d')) {
                 return false;
             }
-            $mensaje = Compra::mensajeCanceladaPorComprador($compra['nombre'], $compra['numero']);
+            $mensaje = Compra::mensajeCanceladaPorComprador(
+                $compra['nombre'], $compra['numero'], (float) ($compra['reintegro_monto'] ?? 0), (int) ($compra['reintegro_porcentaje'] ?? 0)
+            );
             $id = "compra-{$compra['numero']}-cancelada-por-cliente";
         }
 
