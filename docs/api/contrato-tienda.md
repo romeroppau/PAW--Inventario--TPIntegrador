@@ -305,8 +305,8 @@ La compra pasa a pagada solo cuando **nuestro servidor consulta el pago a Mercad
 | Pago | Compra | Se registra el pago como | Aviso al comprador |
 |---|---|---|---|
 | Aprobado, compra esperando el pago | `PAGADA` | `APROBADO` | — |
-| Aprobado, compra ya cancelada (pago tardío) y **hay stock** | `PAGADA` otra vez (el stock se reserva de nuevo, movimiento `revive-V-…`) | `APROBADO` | "el pedido quedó listo para retirar" |
-| Aprobado, compra cancelada **sin stock**, ya pagada con otro pago o por otro monto | sin cambios | `DEVUELTO` (se pide la devolución a Mercado Pago) | "te devolvimos el importe" |
+| Aprobado, compra ya cancelada (pago tardío) y **hay stock** | `PAGADA` otra vez (el stock se reserva de nuevo, movimiento `revive-V-…`) | `APROBADO` | el mismo de un pago a tiempo: "Recibimos el pago de tu pedido…" (al cliente no le hace falta saber que llegó tarde) |
+| Aprobado, compra cancelada **sin stock**, ya pagada con otro pago o por otro monto | sin cambios | `DEVUELTO` (se pide la devolución a Mercado Pago) | según el caso: "Tu pago del pedido V-… llegó cuando ya había terminado el tiempo para pagar, así que te devolvimos el dinero." o "Tu pedido V-… ya estaba pagado, así que te devolvimos el pago que hiciste de más." |
 | Rechazado | sigue `PENDIENTE_PAGO` (puede reintentar mientras le quede tiempo) | `RECHAZADO` | — |
 | Pendiente o en proceso | sin cambios (se espera el próximo aviso) | — | — |
 
@@ -427,8 +427,8 @@ Se mandan por `POST /internal/notificaciones` (Backend), con tipo `COMPRA` y por
 
 | Cuándo | A quién | Canales | `id_operacion` | Mensaje (ejemplo) |
 |---|---|---|---|---|
-| Paga | comprador | campana y WhatsApp (constancia) | `compra-V-000003-pagada` | ✅ ¡Hola, Ana! Recibimos el pago de tu pedido V-000003. Ya podés retirarlo en HuellaVet hasta el miércoles 25/11 inclusive. ¡Te esperamos! |
-| Paga (también un pago tardío que revive la compra) | **cada veterinaria** (todos los usuarios con rol `VETERINARIO`) | campana | `compra-V-000003-pagada-vet-101` (uno por veterinaria) | 🛍️ Nuevo pedido para retirar: V-000003 de Ana Pérez ($ 31.999,80). Fecha límite de retiro: miércoles 25/11. |
+| Paga (también un pago tardío que se pudo usar) | comprador | campana y WhatsApp (constancia) | `compra-V-000003-pagada` | ✅ ¡Hola, Ana! Recibimos el pago de tu pedido V-000003. Ya podés retirarlo en HuellaVet hasta el miércoles 25/11 inclusive. ¡Te esperamos! |
+| Paga (también un pago tardío que se pudo usar) | **cada veterinaria** (todos los usuarios con rol `VETERINARIO`) | campana | `compra-V-000003-pagada-vet-101` (uno por veterinaria) | 🛍️ Nuevo pedido para retirar: V-000003 de Ana Pérez ($ 31.999,80). Fecha límite de retiro: miércoles 25/11. |
 
 Si Backend no responde, la compra sigue igual: el aviso no frena la venta (el error queda en el log).
 

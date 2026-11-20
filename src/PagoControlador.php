@@ -161,29 +161,28 @@ class PagoControlador
 
     // ---------- Ayudas ----------
 
-    // Registra el pago y hace lo que sigue: los avisos de compra paga, devolver el importe si no se
-    // pudo aplicar, y avisarle al comprador si fue un pago tardío. Devuelve lo que devolvió PagoRepositorio::registrar.
+    // Registra el pago y hace lo que sigue: los avisos de compra paga, o devolver el importe (con su
+    // aviso) si no se pudo usar. Devuelve lo que devolvió PagoRepositorio::registrar.
     private static function procesar(PagoRepositorio $pagos, array $pago, ?int $compradorId): string
     {
         $resultado = $pagos->registrar($pago, $compradorId);
         $ahora = new DateTimeImmutable();
 
-        // Compra paga: constancia al comprador (salvo el pago tardío, que tiene su propio aviso abajo)
-        // y "nuevo pedido para retirar" a las veterinarias.
+        // Compra paga (también un pago tardío que se pudo usar): la constancia al comprador, igual que
+        // si hubiera pagado a tiempo, y "nuevo pedido para retirar" a las veterinarias.
         if ($resultado === 'aprobado' || $resultado === 'revivido') {
-            (new AvisosDeCompra($pagos))->pagada($pago['referencia'], $resultado === 'aprobado');
+            (new AvisosDeCompra($pagos))->pagada($pago['referencia']);
         }
 
-        if ($resultado === 'devolver' || $resultado === 'revivido') {
-            if ($resultado === 'devolver' && !MercadoPago::simulado()) {
+        // Pago que no se pudo usar: se devuelve y se le explica al comprador por qué.
+        if ($resultado === 'devolver') {
+            if (!MercadoPago::simulado()) {
                 MercadoPago::devolver($pago['id']);
             }
 
             $comprador = $pagos->comprador($pago['referencia']);
             if ($comprador !== null) {
-                $mensaje = $resultado === 'devolver'
-                    ? Compra::mensajePagoDevuelto($comprador['nombre'], $pago['referencia'])
-                    : Compra::mensajePagoTardioAplicado($comprador['nombre'], $pago['referencia'], new DateTimeImmutable($comprador['fecha']));
+                $mensaje = Compra::mensajePagoDevuelto($comprador['nombre'], $pago['referencia'], $comprador['estado']);
                 Avisos::mandar((int) $comprador['cliente_id'], $mensaje, "compra-{$pago['referencia']}-pago-{$pago['id']}", $ahora);
             }
         }
