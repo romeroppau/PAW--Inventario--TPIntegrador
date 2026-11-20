@@ -30,6 +30,13 @@ class PagoControlador
             return;
         }
 
+        // El link vence 1 minuto antes que la compra. Si ya no queda ese minuto, no se abre: vencería enseguida.
+        $vence = Compra::linkDePagoVence(new DateTimeImmutable($compra['fecha']));
+        if (new DateTimeImmutable() >= $vence) {
+            Response::json(['error' => 'Ya no queda tiempo para pagar esta compra'], 409);
+            return;
+        }
+
         if (MercadoPago::simulado()) {
             Response::json(['url' => '/tienda/pago-simulado.html?numero=' . rawurlencode($compra['numero'])]);
             return;
@@ -40,7 +47,7 @@ class PagoControlador
             return;
         }
 
-        $url = MercadoPago::crearPreferencia($compra, $compra['items'], Compra::pagarAntesDe(new DateTimeImmutable($compra['fecha'])));
+        $url = MercadoPago::crearPreferencia($compra, $compra['items'], $vence);
         if ($url === null) {
             Response::json(['error' => 'No se pudo conectar con Mercado Pago. Probá de nuevo en un momento.'], 502);
             return;

@@ -17,6 +17,14 @@ class CompraTest extends TestCase
         $this->assertSame('V-001234', Compra::numero(1234));
     }
 
+    public function testElLinkDeMercadoPagoVenceUnMinutoAntesQueLaCompra(): void
+    {
+        $confirmada = $this->fecha('2026-11-18 10:30:00');
+
+        $this->assertEquals($this->fecha('2026-11-18 10:44:00'), Compra::linkDePagoVence($confirmada));
+        $this->assertEquals($this->fecha('2026-11-18 10:45:00'), Compra::pagarAntesDe($confirmada));
+    }
+
     public function testHayQuinceMinutosParaPagar(): void
     {
         $confirmada = $this->fecha('2026-11-18 10:30:00');

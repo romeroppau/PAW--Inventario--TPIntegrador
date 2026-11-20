@@ -9,6 +9,9 @@ class Compra
 {
     // Plazos (contrato, "Plazos").
     public const MINUTOS_PARA_PAGAR = 15;
+    // El link de Mercado Pago vence este margen ANTES que la compra: así un pago que empezó a tiempo
+    // tiene un minuto para terminar antes de que la compra se cancele (casi no hay pagos tardíos).
+    public const MINUTOS_DE_MARGEN_DEL_LINK = 1;
     public const DIAS_HABILES_PARA_RETIRAR = 5;
 
     // Los recordatorios y las cancelaciones por vencimiento salen desde esta hora (no de madrugada).
@@ -33,6 +36,12 @@ class Compra
     public static function pagarAntesDe(DateTimeImmutable $fecha): DateTimeImmutable
     {
         return $fecha->modify('+' . self::MINUTOS_PARA_PAGAR . ' minutes');
+    }
+
+    // Hasta cuándo se puede EMPEZAR a pagar en Mercado Pago: 1 minuto antes de que venza la compra.
+    public static function linkDePagoVence(DateTimeImmutable $fecha): DateTimeImmutable
+    {
+        return self::pagarAntesDe($fecha)->modify('-' . self::MINUTOS_DE_MARGEN_DEL_LINK . ' minutes');
     }
 
     // El día hábil número $n después de la fecha (lunes a viernes; los feriados no se cuentan).

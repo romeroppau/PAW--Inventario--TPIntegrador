@@ -310,7 +310,7 @@ La compra pasa a pagada solo cuando **nuestro servidor consulta el pago a Mercad
 | Rechazado | sigue `PENDIENTE_PAGO` (puede reintentar mientras le quede tiempo) | `RECHAZADO` | — |
 | Pendiente o en proceso | sin cambios (se espera el próximo aviso) | — | — |
 
-La preferencia: los productos de la compra, `external_reference` = el número de la compra, vence junto con la compra (`expiration_date_to` = `pagar_antes_de`), **sin efectivo** (`ticket` y `atm` excluidos), **una sola cuota**, `binary_mode` (aprobado o rechazado al instante), vuelta a `tienda/compra.html?numero=V-…` y aviso a `/api/tienda/pagos/aviso`.
+La preferencia: los productos de la compra, `external_reference` = el número de la compra, vence **1 minuto antes** que la compra (`expiration_date_to` = `pagar_antes_de` − 1 minuto: un pago que empezó a tiempo tiene ese minuto para terminar antes de que la compra se cancele, así casi no hay pagos tardíos), **sin efectivo** (`ticket` y `atm` excluidos), **una sola cuota**, `binary_mode` (aprobado o rechazado al instante), vuelta a `tienda/compra.html?numero=V-…` y aviso a `/api/tienda/pagos/aviso`.
 
 ## POST /api/tienda/compras/{numero}/pago
 
@@ -318,7 +318,7 @@ Comprador, con CSRF. Crea el pago y devuelve a dónde va el comprador.
 
 **200 OK:** `{ "url": "https://www.mercadopago.com.ar/checkout/..." }`. En local y en GitHub (`ENTORNO` = `local` o `ci`): `{ "url": "/tienda/pago-simulado.html?numero=V-…" }`.
 
-**Errores:** `404` si no existe o es de otro comprador; `409 { "error": "La compra no está esperando el pago" }` (ya pagada, cancelada o vencidos los 15 minutos); `503` si Mercado Pago no está configurado; `502` si Mercado Pago no respondió.
+**Errores:** `404` si no existe o es de otro comprador; `409 { "error": "La compra no está esperando el pago" }` (ya pagada, cancelada o vencidos los 15 minutos); `409 { "error": "Ya no queda tiempo para pagar esta compra" }` si queda menos de 1 minuto (el link vencería enseguida); `503` si Mercado Pago no está configurado; `502` si Mercado Pago no respondió.
 
 ## POST /api/tienda/compras/{numero}/pago/confirmar
 
