@@ -188,19 +188,6 @@ class Compra
         );
     }
 
-    // Al confirmar ("Ir a pagar"): la compra quedó reservada y hay que pagarla a tiempo.
-    public static function mensajeReservada(string $nombre, string $numero, DateTimeImmutable $fecha): string
-    {
-        return sprintf(
-            '🐾 ¡Hola, %s! Reservamos los productos de tu pedido %s por %d minutos. '
-            . 'Completá el pago con Mercado Pago antes de las %s para que no se cancele.',
-            self::primerNombre($nombre),
-            $numero,
-            self::MINUTOS_PARA_PAGAR,
-            self::pagarAntesDe($fecha)->format('H:i')
-        );
-    }
-
     // Al pagar: la compra ya está paga y lista para retirar (queda como constancia).
     public static function mensajePagada(string $nombre, string $numero, DateTimeImmutable $fecha): string
     {

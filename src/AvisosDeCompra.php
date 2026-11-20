@@ -3,9 +3,11 @@
 // Los avisos que salen en el momento de comprar (contrato: docs/api/contrato-tienda.md, "Avisos"):
 //
 //   Momento                         A quién                  Canales
-//   Confirma ("Ir a pagar")         comprador                campana
 //   Paga (o se aplica un pago       comprador                campana y WhatsApp (constancia del pago)
 //   tardío, que ya tiene su aviso)  cada veterinaria         campana ("nuevo pedido para retirar")
+//
+// Al confirmar ("Ir a pagar") no se avisa: en ese momento el comprador ya está yendo a Mercado Pago
+// y vería el aviso recién a la vuelta, cuando ya no sirve.
 //
 // Las veterinarias son todos los usuarios con rol VETERINARIO (no hay ids fijos). Cada aviso tiene
 // un id_operacion fijo por compra y por destinatario: un reintento nunca lo duplica.
@@ -14,23 +16,6 @@ class AvisosDeCompra
 {
     public function __construct(private CompraRepositorio $compras)
     {
-    }
-
-    // La compra quedó reservada esperando el pago.
-    public function reservada(string $numero): void
-    {
-        $compra = $this->compras->comprador($numero);
-        if ($compra === null) {
-            return;
-        }
-
-        Avisos::mandar(
-            (int) $compra['cliente_id'],
-            Compra::mensajeReservada($compra['nombre'], $numero, new DateTimeImmutable($compra['fecha'])),
-            "compra-$numero-reservada",
-            new DateTimeImmutable(),
-            Avisos::SOLO_CAMPANA
-        );
     }
 
     // La compra quedó paga. Con $avisarComprador = false (pago tardío, que ya le avisó el suyo) solo

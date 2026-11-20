@@ -30,8 +30,6 @@ class CompraControlador
             return;
         }
 
-        (new AvisosDeCompra($compras))->reservada($resultado);
-
         Response::json($compras->detalle($resultado), 201);
     }
 
