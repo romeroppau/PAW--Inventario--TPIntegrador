@@ -106,7 +106,7 @@ class CompraTest extends TestCase
     public function testElAvisoDelPagoDevueltoDiceElMotivoEnPalabrasSimples(): void
     {
         $vencido = Compra::mensajePagoDevuelto('Ana Pérez', 'V-000010', 'CANCELADA');
-        $this->assertSame('Hola, Ana. Tu pago del pedido V-000010 llegó cuando ya había terminado el tiempo para pagar, así que te devolvimos el dinero. Puede tardar unos días en verse en tu medio de pago. 🐾', $vencido);
+        $this->assertSame('Hola, Ana. Tu pago del pedido V-000010 llegó cuando ya había terminado el tiempo para pagar y, mientras tanto, otra persona compró los productos que habías elegido y no quedó stock, así que te devolvimos el dinero. Puede tardar unos días en verse en tu medio de pago. 🐾', $vencido);
 
         $yaPagado = Compra::mensajePagoDevuelto('Ana Pérez', 'V-000010', 'PAGADA');
         $this->assertStringContainsString('Tu pedido V-000010 ya estaba pagado, así que te devolvimos el pago que hiciste de más.', $yaPagado);

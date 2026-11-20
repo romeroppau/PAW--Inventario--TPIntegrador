@@ -306,7 +306,7 @@ La compra pasa a pagada solo cuando **nuestro servidor consulta el pago a Mercad
 |---|---|---|---|
 | Aprobado, compra esperando el pago | `PAGADA` | `APROBADO` | — |
 | Aprobado, compra ya cancelada (pago tardío) y **hay stock** | `PAGADA` otra vez (el stock se reserva de nuevo, movimiento `revive-V-…`) | `APROBADO` | el mismo de un pago a tiempo: "Recibimos el pago de tu pedido…" (al cliente no le hace falta saber que llegó tarde) |
-| Aprobado, compra cancelada **sin stock**, ya pagada con otro pago o por otro monto | sin cambios | `DEVUELTO` (se pide la devolución a Mercado Pago) | según el caso: "Tu pago del pedido V-… llegó cuando ya había terminado el tiempo para pagar, así que te devolvimos el dinero." o "Tu pedido V-… ya estaba pagado, así que te devolvimos el pago que hiciste de más." |
+| Aprobado, compra cancelada **sin stock**, ya pagada con otro pago o por otro monto | sin cambios | `DEVUELTO` (se pide la devolución a Mercado Pago) | según el caso: "Tu pago del pedido V-… llegó cuando ya había terminado el tiempo para pagar y, mientras tanto, otra persona compró los productos que habías elegido y no quedó stock, así que te devolvimos el dinero." o "Tu pedido V-… ya estaba pagado, así que te devolvimos el pago que hiciste de más." |
 | Rechazado | sigue `PENDIENTE_PAGO` (puede reintentar mientras le quede tiempo) | `RECHAZADO` | — |
 | Pendiente o en proceso | sin cambios (se espera el próximo aviso) | — | — |
 

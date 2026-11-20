@@ -165,14 +165,15 @@ class Compra
     }
 
     // Un pago que no se pudo usar y se devolvió. El texto depende de cómo estaba la compra:
-    // - CANCELADA: el pago llegó cuando ya había terminado el tiempo para pagar (y no quedaba stock);
+    // - CANCELADA: el pago llegó cuando ya había terminado el tiempo para pagar y otro se llevó el stock;
     // - PAGADA o ENTREGADA: el pedido ya estaba pagado (pagó dos veces, por ejemplo desde otra pestaña);
     // - otro caso (no debería pasar): un texto general.
     // Si el pago tardío sí se pudo usar, no hay un aviso especial: le llega el de "Recibimos el pago".
     public static function mensajePagoDevuelto(string $nombre, string $numero, string $estadoCompra): string
     {
         $motivo = match ($estadoCompra) {
-            'CANCELADA' => "Tu pago del pedido $numero llegó cuando ya había terminado el tiempo para pagar, así que te devolvimos el dinero.",
+            'CANCELADA' => "Tu pago del pedido $numero llegó cuando ya había terminado el tiempo para pagar y, mientras tanto, "
+                . 'otra persona compró los productos que habías elegido y no quedó stock, así que te devolvimos el dinero.',
             'PAGADA', 'ENTREGADA' => "Tu pedido $numero ya estaba pagado, así que te devolvimos el pago que hiciste de más.",
             default => "No pudimos usar tu pago del pedido $numero, así que te devolvimos el dinero.",
         };
