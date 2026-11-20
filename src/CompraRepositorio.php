@@ -7,6 +7,12 @@
 //   (SELECT ... FOR UPDATE), así dos pedidos al mismo tiempo no se pisan.
 class CompraRepositorio
 {
+    // Los plazos de una compra (migración 015): los guardados o, si una compra no los tiene, calculados
+    // como antes (15 minutos y 5 días hábiles). Se usan en el WHERE y el ORDER BY; en los SELECT van
+    // ya formateados como pagar_antes_de y retirar_hasta.
+    protected const RETIRAR_HASTA = "COALESCE(f.retirar_hasta, DATE(f.fecha) + INTERVAL (CASE WEEKDAY(f.fecha) WHEN 5 THEN 6 WHEN 6 THEN 5 ELSE 7 END) DAY)";
+    protected const PAGAR_ANTES_DE = "COALESCE(f.pagar_antes_de, f.fecha + INTERVAL 15 MINUTE)";
+
     protected const A_LA_VENTA = 'p.activo = 1 AND (p.fecha_vencimiento IS NULL OR p.fecha_vencimiento >= CURDATE())';
 
     // Hora de Argentina (-03:00): la fecha de la factura y de los movimientos.
@@ -57,10 +63,19 @@ class CompraRepositorio
             }
 
             // La factura. El número sale del id, así que primero se inserta con uno provisorio.
+            // La compra guarda sus plazos con la configuración de este momento: si después la
+            // veterinaria los cambia, a esta compra no le cambia lo prometido.
+            $ahora = new DateTimeImmutable();
             $consulta = $this->db->prepare(
-                "INSERT INTO factura_compra (numero, carrito_id, total, estado, fecha) VALUES (?, ?, ?, 'PENDIENTE_PAGO', NOW())"
+                "INSERT INTO factura_compra (numero, carrito_id, total, estado, fecha, pagar_antes_de, retirar_hasta)
+                 VALUES (?, ?, ?, 'PENDIENTE_PAGO', ?, ?, ?)"
             );
-            $consulta->execute(['V-TMP-' . $carritoId, $carritoId, number_format($total, 2, '.', '')]);
+            $consulta->execute([
+                'V-TMP-' . $carritoId, $carritoId, number_format($total, 2, '.', ''),
+                $ahora->format('Y-m-d H:i:s'),
+                Compra::pagarAntesDe($ahora)->format('Y-m-d H:i:s'),
+                Compra::retirarHasta($ahora)->format('Y-m-d'),
+            ]);
             $facturaId = (int) $this->db->lastInsertId();
             $numero = Compra::numero($facturaId);
             $this->db->prepare('UPDATE factura_compra SET numero = ? WHERE id = ?')->execute([$numero, $facturaId]);
@@ -89,7 +104,7 @@ class CompraRepositorio
     public function delComprador(int $compradorId): array
     {
         $consulta = $this->db->prepare(
-            "SELECT f.numero, f.estado, DATE_FORMAT(f.fecha, '%Y-%m-%d %H:%i:%s') AS fecha, f.total, f.motivo_cancelacion
+            "SELECT f.numero, f.estado, DATE_FORMAT(f.fecha, '%Y-%m-%d %H:%i:%s') AS fecha, DATE_FORMAT(COALESCE(f.pagar_antes_de, f.fecha + INTERVAL 15 MINUTE), '%Y-%m-%d %H:%i:%s') AS pagar_antes_de, DATE_FORMAT(COALESCE(f.retirar_hasta, DATE(f.fecha) + INTERVAL (CASE WEEKDAY(f.fecha) WHEN 5 THEN 6 WHEN 6 THEN 5 ELSE 7 END) DAY), '%Y-%m-%d') AS retirar_hasta, f.total, f.motivo_cancelacion
              FROM factura_compra f JOIN carrito c ON c.id = f.carrito_id
              WHERE c.cliente_id = ?
              ORDER BY f.fecha DESC, f.id DESC"
@@ -103,7 +118,7 @@ class CompraRepositorio
     public function detalle(string $numero, ?int $compradorId = null): ?array
     {
         $consulta = $this->db->prepare(
-            "SELECT f.id, f.numero, f.estado, DATE_FORMAT(f.fecha, '%Y-%m-%d %H:%i:%s') AS fecha, f.total, f.motivo_cancelacion,
+            "SELECT f.id, f.numero, f.estado, DATE_FORMAT(f.fecha, '%Y-%m-%d %H:%i:%s') AS fecha, DATE_FORMAT(COALESCE(f.pagar_antes_de, f.fecha + INTERVAL 15 MINUTE), '%Y-%m-%d %H:%i:%s') AS pagar_antes_de, DATE_FORMAT(COALESCE(f.retirar_hasta, DATE(f.fecha) + INTERVAL (CASE WEEKDAY(f.fecha) WHEN 5 THEN 6 WHEN 6 THEN 5 ELSE 7 END) DAY), '%Y-%m-%d') AS retirar_hasta, f.total, f.motivo_cancelacion,
                     DATE_FORMAT(f.entregada_en, '%Y-%m-%d %H:%i:%s') AS entregada_en, c.cliente_id,
                     (SELECT p.id_externo FROM pago p WHERE p.factura_compra_id = f.id AND p.estado = 'APROBADO'
                      ORDER BY p.id DESC LIMIT 1) AS operacion_mp
@@ -132,7 +147,7 @@ class CompraRepositorio
     public function comprador(string $numero): ?array
     {
         $consulta = $this->db->prepare(
-            "SELECT c.cliente_id, u.nombre, DATE_FORMAT(f.fecha, '%Y-%m-%d %H:%i:%s') AS fecha, f.total, f.estado
+            "SELECT c.cliente_id, u.nombre, DATE_FORMAT(f.fecha, '%Y-%m-%d %H:%i:%s') AS fecha, DATE_FORMAT(COALESCE(f.pagar_antes_de, f.fecha + INTERVAL 15 MINUTE), '%Y-%m-%d %H:%i:%s') AS pagar_antes_de, DATE_FORMAT(COALESCE(f.retirar_hasta, DATE(f.fecha) + INTERVAL (CASE WEEKDAY(f.fecha) WHEN 5 THEN 6 WHEN 6 THEN 5 ELSE 7 END) DAY), '%Y-%m-%d') AS retirar_hasta, f.total, f.estado
              FROM factura_compra f JOIN carrito c ON c.id = f.carrito_id JOIN usuario u ON u.id = c.cliente_id
              WHERE f.numero = ?"
         );
@@ -157,12 +172,12 @@ class CompraRepositorio
     public function deLaVeterinaria(string $estado, string $buscar = ''): array
     {
         $orden = match ($estado) {
-            'PAGADA' => 'f.fecha, f.id',
+            'PAGADA' => self::RETIRAR_HASTA . ', f.fecha, f.id',
             'ENTREGADA' => 'f.entregada_en DESC, f.id DESC',
             default => 'f.cancelada_en DESC, f.id DESC',
         };
 
-        $sql = "SELECT f.id, f.numero, f.estado, DATE_FORMAT(f.fecha, '%Y-%m-%d %H:%i:%s') AS fecha, f.total,
+        $sql = "SELECT f.id, f.numero, f.estado, DATE_FORMAT(f.fecha, '%Y-%m-%d %H:%i:%s') AS fecha, DATE_FORMAT(COALESCE(f.pagar_antes_de, f.fecha + INTERVAL 15 MINUTE), '%Y-%m-%d %H:%i:%s') AS pagar_antes_de, DATE_FORMAT(COALESCE(f.retirar_hasta, DATE(f.fecha) + INTERVAL (CASE WEEKDAY(f.fecha) WHEN 5 THEN 6 WHEN 6 THEN 5 ELSE 7 END) DAY), '%Y-%m-%d') AS retirar_hasta, f.total,
                        f.motivo_cancelacion, u.nombre AS comprador,
                        DATE_FORMAT(f.entregada_en, '%Y-%m-%d %H:%i:%s') AS entregada_en, v.nombre AS entregada_por
                 FROM factura_compra f
@@ -269,20 +284,20 @@ class CompraRepositorio
     // ---------- Vencimientos ----------
     // Los usa la clase Vencimientos (la tarea programada y la cancelación "al pasar").
 
-    // Los números de las compras vencidas: sin pagar con más de 15 minutos, o pagadas que pasaron
-    // el plazo de retiro. El SQL hace un primer filtro amplio y la regla exacta la decide Compra.
+    // Los números de las compras vencidas: sin pagar después de su tiempo para pagar, o pagadas que
+    // pasaron su último día para retirar (desde la hora de los avisos del día siguiente). El SQL hace
+    // un primer filtro con los plazos guardados y la regla exacta la decide Compra.
     public function vencidas(DateTimeImmutable $ahora): array
     {
         $consulta = $this->db->prepare(
-            "SELECT numero, estado, DATE_FORMAT(fecha, '%Y-%m-%d %H:%i:%s') AS fecha
-             FROM factura_compra
-             WHERE (estado = 'PENDIENTE_PAGO' AND fecha <= ?) OR (estado = 'PAGADA' AND fecha <= ?)"
+            "SELECT f.numero, f.estado, DATE_FORMAT(f.fecha, '%Y-%m-%d %H:%i:%s') AS fecha,
+                    DATE_FORMAT(" . self::PAGAR_ANTES_DE . ", '%Y-%m-%d %H:%i:%s') AS pagar_antes_de,
+                    DATE_FORMAT(" . self::RETIRAR_HASTA . ", '%Y-%m-%d') AS retirar_hasta
+             FROM factura_compra f
+             WHERE (f.estado = 'PENDIENTE_PAGO' AND " . self::PAGAR_ANTES_DE . " <= ?)
+                OR (f.estado = 'PAGADA' AND " . self::RETIRAR_HASTA . " < ?)"
         );
-        $consulta->execute([
-            $ahora->modify('-' . Compra::MINUTOS_PARA_PAGAR . ' minutes')->format('Y-m-d H:i:s'),
-            // 5 días hábiles son siempre más de 5 días de calendario.
-            $ahora->modify('-' . Compra::DIAS_HABILES_PARA_RETIRAR . ' days')->format('Y-m-d H:i:s'),
-        ]);
+        $consulta->execute([$ahora->format('Y-m-d H:i:s'), $ahora->format('Y-m-d')]);
 
         $numeros = [];
         foreach ($consulta->fetchAll() as $fila) {
@@ -323,7 +338,7 @@ class CompraRepositorio
     public function pagadasConComprador(): array
     {
         return $this->db->query(
-            "SELECT f.numero, DATE_FORMAT(f.fecha, '%Y-%m-%d %H:%i:%s') AS fecha, c.cliente_id, u.nombre
+            "SELECT f.numero, DATE_FORMAT(f.fecha, '%Y-%m-%d %H:%i:%s') AS fecha, DATE_FORMAT(COALESCE(f.pagar_antes_de, f.fecha + INTERVAL 15 MINUTE), '%Y-%m-%d %H:%i:%s') AS pagar_antes_de, DATE_FORMAT(COALESCE(f.retirar_hasta, DATE(f.fecha) + INTERVAL (CASE WEEKDAY(f.fecha) WHEN 5 THEN 6 WHEN 6 THEN 5 ELSE 7 END) DAY), '%Y-%m-%d') AS retirar_hasta, c.cliente_id, u.nombre
              FROM factura_compra f
              JOIN carrito c ON c.id = f.carrito_id
              JOIN usuario u ON u.id = c.cliente_id
@@ -336,7 +351,7 @@ class CompraRepositorio
     // de pagar (COMPRADOR con pago aprobado). Con $numero, solo esa.
     public function canceladasPagadasConComprador(DateTimeImmutable $ahora, ?string $numero = null): array
     {
-        $sql = "SELECT f.numero, DATE_FORMAT(f.fecha, '%Y-%m-%d %H:%i:%s') AS fecha, f.motivo_cancelacion,
+        $sql = "SELECT f.numero, DATE_FORMAT(f.fecha, '%Y-%m-%d %H:%i:%s') AS fecha, DATE_FORMAT(COALESCE(f.pagar_antes_de, f.fecha + INTERVAL 15 MINUTE), '%Y-%m-%d %H:%i:%s') AS pagar_antes_de, DATE_FORMAT(COALESCE(f.retirar_hasta, DATE(f.fecha) + INTERVAL (CASE WEEKDAY(f.fecha) WHEN 5 THEN 6 WHEN 6 THEN 5 ELSE 7 END) DAY), '%Y-%m-%d') AS retirar_hasta, f.motivo_cancelacion,
                        DATE_FORMAT(f.cancelada_en, '%Y-%m-%d %H:%i:%s') AS cancelada_en, c.cliente_id, u.nombre
                 FROM factura_compra f
                 JOIN carrito c ON c.id = f.carrito_id
@@ -361,12 +376,10 @@ class CompraRepositorio
     // Por qué venció una compra ('sin_pago' o 'sin_retirar'), o null si no venció.
     private static function motivoDeVencimiento(array $factura, DateTimeImmutable $ahora): ?string
     {
-        $fecha = new DateTimeImmutable($factura['fecha']);
-
-        if ($factura['estado'] === 'PENDIENTE_PAGO' && Compra::vencioSinPagar($fecha, $ahora)) {
+        if ($factura['estado'] === 'PENDIENTE_PAGO' && Compra::vencioSinPagar(new DateTimeImmutable($factura['pagar_antes_de']), $ahora)) {
             return 'sin_pago';
         }
-        if ($factura['estado'] === 'PAGADA' && Compra::vencioSinRetirar($fecha, $ahora)) {
+        if ($factura['estado'] === 'PAGADA' && Compra::vencioSinRetirar(new DateTimeImmutable($factura['retirar_hasta']), $ahora)) {
             return 'sin_retirar';
         }
 
@@ -396,7 +409,7 @@ class CompraRepositorio
     protected function bloquearFactura(string $numero): ?array
     {
         $consulta = $this->db->prepare(
-            "SELECT f.id, f.numero, f.estado, DATE_FORMAT(f.fecha, '%Y-%m-%d %H:%i:%s') AS fecha, f.total, f.carrito_id, c.cliente_id
+            "SELECT f.id, f.numero, f.estado, DATE_FORMAT(f.fecha, '%Y-%m-%d %H:%i:%s') AS fecha, DATE_FORMAT(COALESCE(f.pagar_antes_de, f.fecha + INTERVAL 15 MINUTE), '%Y-%m-%d %H:%i:%s') AS pagar_antes_de, DATE_FORMAT(COALESCE(f.retirar_hasta, DATE(f.fecha) + INTERVAL (CASE WEEKDAY(f.fecha) WHEN 5 THEN 6 WHEN 6 THEN 5 ELSE 7 END) DAY), '%Y-%m-%d') AS retirar_hasta, f.total, f.carrito_id, c.cliente_id
              FROM factura_compra f JOIN carrito c ON c.id = f.carrito_id
              WHERE f.numero = ? FOR UPDATE"
         );
@@ -475,21 +488,21 @@ class CompraRepositorio
     // retirar_hasta mientras se puede retirar.
     protected function resumen(array $fila): array
     {
-        $fecha = new DateTimeImmutable($fila['fecha']);
         $estado = $fila['estado'];
+        $pagarAntesDe = new DateTimeImmutable($fila['pagar_antes_de']);
 
         return [
             'numero' => $fila['numero'],
             'estado' => $estado,
             'fecha' => $fila['fecha'],
             'total' => (float) $fila['total'],
-            'pagar_antes_de' => $estado === 'PENDIENTE_PAGO' ? Compra::pagarAntesDe($fecha)->format('Y-m-d H:i:s') : null,
+            'pagar_antes_de' => $estado === 'PENDIENTE_PAGO' ? $fila['pagar_antes_de'] : null,
             // Lo que falta para pagar, contado por el servidor: la cuenta regresiva de la pantalla parte de
             // acá y no del reloj de la computadora del comprador (que puede estar adelantado o atrasado).
-            'segundos_para_pagar' => $estado === 'PENDIENTE_PAGO'
-                ? max(0, Compra::pagarAntesDe($fecha)->getTimestamp() - time())
-                : null,
-            'retirar_hasta' => in_array($estado, ['PENDIENTE_PAGO', 'PAGADA'], true) ? Compra::retirarHasta($fecha)->format('Y-m-d') : null,
+            'segundos_para_pagar' => $estado === 'PENDIENTE_PAGO' ? max(0, $pagarAntesDe->getTimestamp() - time()) : null,
+            'retirar_hasta' => in_array($estado, ['PENDIENTE_PAGO', 'PAGADA'], true) ? $fila['retirar_hasta'] : null,
+            // Los días hábiles de plazo que tuvo esta compra (para el texto de la política).
+            'dias_habiles_para_retirar' => Compra::diasHabilesEntre(new DateTimeImmutable($fila['fecha']), new DateTimeImmutable($fila['retirar_hasta'])),
             // Por qué se canceló: COMPRADOR, SIN_PAGO o VENCIDA (solo en las canceladas).
             'motivo_cancelacion' => $estado === 'CANCELADA' ? ($fila['motivo_cancelacion'] ?? null) : null,
         ];
