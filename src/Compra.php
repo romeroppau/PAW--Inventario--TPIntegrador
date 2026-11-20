@@ -3,9 +3,13 @@
 // Las reglas de una compra de la tienda: los plazos, los recordatorios y el texto de los avisos.
 // No tiene SQL: la usan CompraRepositorio y CompraControlador. Contrato: docs/api/contrato-tienda.md.
 //
-// Los plazos los configura la veterinaria desde su panel (tabla configuracion, catálogo de Backend:
-// grupo "Tienda"). Cada compra guarda los suyos al confirmarse (pagar_antes_de y retirar_hasta,
-// migración 015): un cambio en la configuración vale solo para las compras nuevas.
+// Los plazos y la política de reintegro los configura la veterinaria desde su panel (tabla
+// configuracion, catálogo de Backend: grupo "Tienda"). Cada compra guarda los suyos al confirmarse
+// (migraciones 015 y 017): un cambio en la configuración vale solo para las compras nuevas.
+//
+// Reintegro: si el comprador cancela un pedido ya pagado, se le devuelve una parte de lo que pagó.
+// Con anticipación (las horas configuradas o más antes del final del último día para retirar), el
+// porcentaje mayor; después, el menor. Si no lo retira a tiempo, nada.
 //
 // Las funciones reciben fechas y "ahora" como datos, en lugar de mirar el reloj: así se pueden probar
 // con cualquier día (tests/CompraTest.php). Las fechas son de Argentina.
@@ -17,6 +21,9 @@ class Compra
     public const DIAS_HABILES_PARA_RETIRAR = 5;       // configuracion: dias_habiles_para_retirar (2 a 15)
     public const HORA_DE_AVISOS = '09:00';            // configuracion: hora_avisos_tienda (07:00 a 20:00)
     public const DIA_PRIMER_RECORDATORIO = 2;         // configuracion: dia_primer_recordatorio (1 a 13)
+    public const REINTEGRO_ANTICIPADO = 75;           // configuracion: porcentaje_reintegro_anticipado (0 a 100)
+    public const REINTEGRO_ULTIMO_MOMENTO = 50;       // configuracion: porcentaje_reintegro_ultimo_momento (0 a 100)
+    public const HORAS_ANTICIPACION_REINTEGRO = 48;   // configuracion: horas_anticipacion_reintegro (1 a 168)
 
     // El link de Mercado Pago vence este margen ANTES que la compra: así un pago que empezó a tiempo
     // tiene un minuto para terminar antes de que la compra se cancele (casi no hay pagos tardíos).
@@ -56,6 +63,21 @@ class Compra
     public static function diaPrimerRecordatorio(): int
     {
         return self::entero('dia_primer_recordatorio', self::DIA_PRIMER_RECORDATORIO, 1, 13);
+    }
+
+    // La política de reintegro para una compra nueva (se guarda al confirmar). Si la configuración
+    // quedara con el porcentaje a último momento mayor que el anticipado (Backend no lo deja), se usa
+    // el anticipado para los dos: nunca conviene esperar para cancelar.
+    public static function politicaDeReintegro(): array
+    {
+        $anticipado = self::entero('porcentaje_reintegro_anticipado', self::REINTEGRO_ANTICIPADO, 0, 100);
+        $ultimoMomento = self::entero('porcentaje_reintegro_ultimo_momento', self::REINTEGRO_ULTIMO_MOMENTO, 0, 100);
+
+        return [
+            'anticipado' => $anticipado,
+            'ultimo_momento' => min($ultimoMomento, $anticipado),
+            'horas' => self::entero('horas_anticipacion_reintegro', self::HORAS_ANTICIPACION_REINTEGRO, 1, 168),
+        ];
     }
 
     private static function entero(string $clave, int $defecto, int $minimo, int $maximo): int
@@ -155,6 +177,27 @@ class Compra
         return $retirarHasta->setTime(0, 0)->modify('+1 day')->setTime($hora, $minuto);
     }
 
+    // ---------- Reintegro al cancelar un pedido pagado ----------
+
+    // Hasta qué momento (inclusive) se cancela "con anticipación": $horas antes del final del último
+    // día para retirar. Con 48 horas y último día el miércoles 25: hasta el lunes 23 a las 23:59:59.
+    public static function reintegroMayorHasta(DateTimeImmutable $retirarHasta, int $horas): DateTimeImmutable
+    {
+        return $retirarHasta->setTime(0, 0)->modify('+1 day')->modify("-$horas hours")->modify('-1 second');
+    }
+
+    // El porcentaje que le corresponde al comprador si cancela en este momento.
+    public static function porcentajeDeReintegro(DateTimeImmutable $retirarHasta, DateTimeImmutable $ahora, int $anticipado, int $ultimoMomento, int $horas): int
+    {
+        return $ahora <= self::reintegroMayorHasta($retirarHasta, $horas) ? $anticipado : $ultimoMomento;
+    }
+
+    // Cuánto se devuelve: el porcentaje del total, en pesos con centavos.
+    public static function montoDeReintegro(float $total, int $porcentaje): float
+    {
+        return round($total * $porcentaje / 100, 2);
+    }
+
     // ---------- Recordatorios ----------
 
     // Qué recordatorio le toca hoy a una compra pagada: 'dia2' (el primero), 'dia4' (el último) o null.
@@ -229,15 +272,20 @@ class Compra
         );
     }
 
-    // Cuando el comprador cancela un pedido que ya pagó.
-    public static function mensajeCanceladaPorComprador(string $nombre, string $numero): string
+    // Cuando el comprador cancela un pedido que ya pagó: cuánto se le devuelve (si el porcentaje es 0,
+    // que no se reintegra).
+    public static function mensajeCanceladaPorComprador(string $nombre, string $numero, float $monto, int $porcentaje): string
     {
+        $reintegro = $monto > 0
+            ? sprintf('Te devolvemos $ %s (el %d %% de lo que pagaste) a tu medio de pago; puede tardar unos días en verse.', self::pesos($monto), $porcentaje)
+            : 'Como indica la política de cancelación, el importe no se reintegra.';
+
         return sprintf(
-            'Hola, %s. Cancelaste tu pedido %s y los productos volvieron a la tienda. '
-            . 'Como indica la política de cancelación, el importe no se reintegra. '
+            'Hola, %s. Cancelaste tu pedido %s y los productos volvieron a la tienda. %s '
             . 'Si tenés alguna duda, escribinos. ¡Te esperamos pronto en HuellaVet! 🐾',
             self::primerNombre($nombre),
-            $numero
+            $numero,
+            $reintegro
         );
     }
 
@@ -276,9 +324,15 @@ class Compra
             '🛍️ Nuevo pedido para retirar: %s de %s ($ %s). Fecha límite de retiro: %s.',
             $numero,
             trim($comprador),
-            number_format($total, 2, ',', '.'),
+            self::pesos($total),
             self::diaConNombre($retirarHasta)
         );
+    }
+
+    // 31999.8 -> "31.999,80"
+    private static function pesos(float $valor): string
+    {
+        return number_format($valor, 2, ',', '.');
     }
 
     // "martes 25/11"

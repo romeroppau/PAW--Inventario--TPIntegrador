@@ -81,6 +81,8 @@ class CarritoRepositorio
             'minutos_para_pagar' => Compra::minutosParaPagar(),
             'dias_habiles_para_retirar' => Compra::diasHabilesParaRetirar(),
             'retirar_hasta_si_compra_hoy' => Compra::retirarHasta(new DateTimeImmutable())->format('Y-m-d'),
+            // La política de reintegro si cancela una compra ya pagada: { anticipado, ultimo_momento, horas }.
+            'politica_reintegro' => Compra::politicaDeReintegro(),
         ];
     }
 

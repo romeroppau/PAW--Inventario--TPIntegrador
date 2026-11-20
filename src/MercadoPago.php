@@ -116,6 +116,24 @@ class MercadoPago
         return true;
     }
 
+    // Devuelve una parte de un pago (el reintegro al cancelar un pedido pagado). La clave de
+    // idempotencia es fija por pago: si se reintenta, Mercado Pago no devuelve dos veces.
+    // Devuelve true si Mercado Pago lo aceptó.
+    public static function devolverParte(string $pagoId, float $monto): bool
+    {
+        if (!ctype_digit($pagoId) || $monto <= 0) {
+            return false;
+        }
+
+        [$codigo] = self::pedir('POST', "/v1/payments/$pagoId/refunds", ['amount' => round($monto, 2)], "reintegro-$pagoId");
+        if ($codigo !== 201 && $codigo !== 200) {
+            Logger::error("Inventario: Mercado Pago no hizo el reintegro de \$ $monto del pago $pagoId (HTTP $codigo). Se reintenta en la próxima tarea.");
+            return false;
+        }
+
+        return true;
+    }
+
     // ¿El aviso viene de Mercado Pago? Se firma con la clave secreta del webhook:
     // x-signature: "ts=1704908010,v1=<hmac>", sobre "id:<data.id>;request-id:<x-request-id>;ts:<ts>;"
     // (si falta un dato, esa parte no va). El data.id alfanumérico va en minúsculas.

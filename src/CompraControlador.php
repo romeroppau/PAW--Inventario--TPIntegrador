@@ -88,7 +88,8 @@ class CompraControlador
 
     // POST /api/tienda/compras/{numero}/cancelar
     // El comprador cancela su compra: antes de pagar o ya pagada (mientras está para retirar).
-    // Si estaba pagada, el importe no se reintegra y se le manda un aviso.
+    // Si estaba pagada, se le devuelve una parte (más si cancela con anticipación: Compra) y se le
+    // manda un aviso con cuánto.
     public static function cancelar(array $parametros): void
     {
         $comprador = self::comprador(true);
@@ -110,6 +111,8 @@ class CompraControlador
             return;
         }
         if ($resultado === 'pagada') {
+            // El reintegro en Mercado Pago (si falla, queda pendiente y lo reintenta la tarea) y el aviso.
+            (new Reintegros($compras))->hacerPendientes($numero);
             (new Vencimientos($compras))->avisarCancelacionPorComprador($numero, new DateTimeImmutable());
         }
 

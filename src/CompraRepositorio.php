@@ -13,6 +13,13 @@ class CompraRepositorio
     protected const RETIRAR_HASTA = "COALESCE(f.retirar_hasta, DATE(f.fecha) + INTERVAL (CASE WEEKDAY(f.fecha) WHEN 5 THEN 6 WHEN 6 THEN 5 ELSE 7 END) DAY)";
     protected const PAGAR_ANTES_DE = "COALESCE(f.pagar_antes_de, f.fecha + INTERVAL 15 MINUTE)";
 
+    // La política de reintegro de una compra (migración 017): la guardada o, si la compra es anterior,
+    // los valores por defecto. Y el reintegro de una cancelada por el comprador (si hay).
+    protected const REINTEGRO = 'COALESCE(f.reintegro_anticipado, ' . Compra::REINTEGRO_ANTICIPADO . ') AS reintegro_anticipado, '
+        . 'COALESCE(f.reintegro_ultimo_momento, ' . Compra::REINTEGRO_ULTIMO_MOMENTO . ') AS reintegro_ultimo_momento, '
+        . 'COALESCE(f.reintegro_horas, ' . Compra::HORAS_ANTICIPACION_REINTEGRO . ') AS reintegro_horas, '
+        . 'f.reintegro_porcentaje, f.reintegro_monto, f.reintegro_estado';
+
     protected const A_LA_VENTA = 'p.activo = 1 AND (p.fecha_vencimiento IS NULL OR p.fecha_vencimiento >= CURDATE())';
 
     // Hora de Argentina (-03:00): la fecha de la factura y de los movimientos.
@@ -67,14 +74,17 @@ class CompraRepositorio
             // veterinaria los cambia, a esta compra no le cambia lo prometido.
             $ahora = new DateTimeImmutable();
             $consulta = $this->db->prepare(
-                "INSERT INTO factura_compra (numero, carrito_id, total, estado, fecha, pagar_antes_de, retirar_hasta)
-                 VALUES (?, ?, ?, 'PENDIENTE_PAGO', ?, ?, ?)"
+                "INSERT INTO factura_compra (numero, carrito_id, total, estado, fecha, pagar_antes_de, retirar_hasta,
+                                             reintegro_anticipado, reintegro_ultimo_momento, reintegro_horas)
+                 VALUES (?, ?, ?, 'PENDIENTE_PAGO', ?, ?, ?, ?, ?, ?)"
             );
+            $reintegro = Compra::politicaDeReintegro();
             $consulta->execute([
                 'V-TMP-' . $carritoId, $carritoId, number_format($total, 2, '.', ''),
                 $ahora->format('Y-m-d H:i:s'),
                 Compra::pagarAntesDe($ahora)->format('Y-m-d H:i:s'),
                 Compra::retirarHasta($ahora)->format('Y-m-d'),
+                $reintegro['anticipado'], $reintegro['ultimo_momento'], $reintegro['horas'],
             ]);
             $facturaId = (int) $this->db->lastInsertId();
             $numero = Compra::numero($facturaId);
@@ -111,7 +121,8 @@ class CompraRepositorio
         $consulta = $this->db->prepare(
             "SELECT f.numero, f.estado, DATE_FORMAT(f.fecha, '%Y-%m-%d %H:%i:%s') AS fecha,
                     DATE_FORMAT(" . self::PAGAR_ANTES_DE . ", '%Y-%m-%d %H:%i:%s') AS pagar_antes_de,
-                    DATE_FORMAT(" . self::RETIRAR_HASTA . ", '%Y-%m-%d') AS retirar_hasta, f.total, f.motivo_cancelacion, (EXISTS (SELECT 1 FROM pago p WHERE p.factura_compra_id = f.id AND p.estado = 'APROBADO')) AS tiene_factura
+                    DATE_FORMAT(" . self::RETIRAR_HASTA . ", '%Y-%m-%d') AS retirar_hasta, f.total, f.motivo_cancelacion, (EXISTS (SELECT 1 FROM pago p WHERE p.factura_compra_id = f.id AND p.estado = 'APROBADO')) AS tiene_factura,
+                    " . self::REINTEGRO . "
              FROM factura_compra f JOIN carrito c ON c.id = f.carrito_id
              WHERE c.cliente_id = ? AND DATE(f.fecha) BETWEEN ? AND ?
              ORDER BY f.fecha DESC, f.id DESC
@@ -126,7 +137,7 @@ class CompraRepositorio
     public function detalle(string $numero, ?int $compradorId = null): ?array
     {
         $consulta = $this->db->prepare(
-            "SELECT f.id, f.numero, f.estado, DATE_FORMAT(f.fecha, '%Y-%m-%d %H:%i:%s') AS fecha, DATE_FORMAT(COALESCE(f.pagar_antes_de, f.fecha + INTERVAL 15 MINUTE), '%Y-%m-%d %H:%i:%s') AS pagar_antes_de, DATE_FORMAT(COALESCE(f.retirar_hasta, DATE(f.fecha) + INTERVAL (CASE WEEKDAY(f.fecha) WHEN 5 THEN 6 WHEN 6 THEN 5 ELSE 7 END) DAY), '%Y-%m-%d') AS retirar_hasta, f.total, f.motivo_cancelacion, (EXISTS (SELECT 1 FROM pago p WHERE p.factura_compra_id = f.id AND p.estado = 'APROBADO')) AS tiene_factura,
+            "SELECT f.id, f.numero, f.estado, DATE_FORMAT(f.fecha, '%Y-%m-%d %H:%i:%s') AS fecha, DATE_FORMAT(COALESCE(f.pagar_antes_de, f.fecha + INTERVAL 15 MINUTE), '%Y-%m-%d %H:%i:%s') AS pagar_antes_de, DATE_FORMAT(COALESCE(f.retirar_hasta, DATE(f.fecha) + INTERVAL (CASE WEEKDAY(f.fecha) WHEN 5 THEN 6 WHEN 6 THEN 5 ELSE 7 END) DAY), '%Y-%m-%d') AS retirar_hasta, f.total, f.motivo_cancelacion, (EXISTS (SELECT 1 FROM pago p WHERE p.factura_compra_id = f.id AND p.estado = 'APROBADO')) AS tiene_factura, " . self::REINTEGRO . ",
                     DATE_FORMAT(f.entregada_en, '%Y-%m-%d %H:%i:%s') AS entregada_en, c.cliente_id,
                     (SELECT p.id_externo FROM pago p WHERE p.factura_compra_id = f.id AND p.estado = 'APROBADO'
                      ORDER BY p.id DESC LIMIT 1) AS operacion_mp
@@ -189,7 +200,7 @@ class CompraRepositorio
         };
 
         $sql = "SELECT f.id, f.numero, f.estado, DATE_FORMAT(f.fecha, '%Y-%m-%d %H:%i:%s') AS fecha, DATE_FORMAT(COALESCE(f.pagar_antes_de, f.fecha + INTERVAL 15 MINUTE), '%Y-%m-%d %H:%i:%s') AS pagar_antes_de, DATE_FORMAT(COALESCE(f.retirar_hasta, DATE(f.fecha) + INTERVAL (CASE WEEKDAY(f.fecha) WHEN 5 THEN 6 WHEN 6 THEN 5 ELSE 7 END) DAY), '%Y-%m-%d') AS retirar_hasta, f.total,
-                       f.motivo_cancelacion, (EXISTS (SELECT 1 FROM pago p WHERE p.factura_compra_id = f.id AND p.estado = 'APROBADO')) AS tiene_factura, u.nombre AS comprador,
+                       f.motivo_cancelacion, (EXISTS (SELECT 1 FROM pago p WHERE p.factura_compra_id = f.id AND p.estado = 'APROBADO')) AS tiene_factura, " . self::REINTEGRO . ", u.nombre AS comprador,
                        DATE_FORMAT(f.entregada_en, '%Y-%m-%d %H:%i:%s') AS entregada_en, v.nombre AS entregada_por
                 FROM factura_compra f
                 JOIN carrito c ON c.id = f.carrito_id
@@ -260,7 +271,7 @@ class CompraRepositorio
                     DATE_FORMAT(" . self::PAGAR_ANTES_DE . ", '%Y-%m-%d %H:%i:%s') AS pagar_antes_de,
                     DATE_FORMAT(" . self::RETIRAR_HASTA . ", '%Y-%m-%d') AS retirar_hasta,
                     f.total, f.motivo_cancelacion, DATE_FORMAT(f.entregada_en, '%Y-%m-%d %H:%i:%s') AS entregada_en,
-                    DATE_FORMAT(f.cancelada_en, '%Y-%m-%d %H:%i:%s') AS cancelada_en,
+                    DATE_FORMAT(f.cancelada_en, '%Y-%m-%d %H:%i:%s') AS cancelada_en, " . self::REINTEGRO . ",
                     c.cliente_id, u.nombre AS comprador, u.email, v.nombre AS entregada_por,
                     p.id_externo AS operacion, DATE_FORMAT(p.fecha, '%Y-%m-%d %H:%i:%s') AS pagada_en
              FROM factura_compra f
@@ -343,6 +354,18 @@ class CompraRepositorio
 
             $this->cancelar($factura, $compradorId, 'COMPRADOR');
 
+            // Ya pagada: el reintegro que le toca según cuándo cancela (la política de esta compra).
+            // Queda PENDIENTE: lo hace Reintegros enseguida (y si Mercado Pago falla, la tarea lo reintenta).
+            if ($factura['estado'] === 'PAGADA') {
+                $porcentaje = Compra::porcentajeDeReintegro(
+                    new DateTimeImmutable($factura['retirar_hasta']), new DateTimeImmutable(),
+                    (int) $factura['reintegro_anticipado'], (int) $factura['reintegro_ultimo_momento'], (int) $factura['reintegro_horas']
+                );
+                $monto = Compra::montoDeReintegro((float) $factura['total'], $porcentaje);
+                $this->db->prepare('UPDATE factura_compra SET reintegro_porcentaje = ?, reintegro_monto = ?, reintegro_estado = ? WHERE id = ?')
+                    ->execute([$porcentaje, number_format($monto, 2, '.', ''), $monto > 0 ? 'PENDIENTE' : null, $factura['id']]);
+            }
+
             $this->db->commit();
         } catch (Throwable $error) {
             $this->db->rollBack();
@@ -350,6 +373,40 @@ class CompraRepositorio
         }
 
         return $factura['estado'] === 'PAGADA' ? 'pagada' : 'sin_pagar';
+    }
+
+    // ---------- Reintegros ----------
+
+    // Los reintegros que faltan hacer (o solo el de $numero): numero, monto y el pago aprobado de
+    // Mercado Pago (pago_id) sobre el que se devuelve.
+    public function reintegrosPendientes(?string $numero = null): array
+    {
+        $sql = "SELECT f.numero, f.reintegro_monto AS monto,
+                       (SELECT p.id_externo FROM pago p WHERE p.factura_compra_id = f.id AND p.estado = 'APROBADO'
+                        ORDER BY p.id DESC LIMIT 1) AS pago_id
+                FROM factura_compra f
+                WHERE f.reintegro_estado = 'PENDIENTE'";
+        $parametros = [];
+        if ($numero !== null) {
+            $sql .= ' AND f.numero = ?';
+            $parametros[] = $numero;
+        }
+
+        $consulta = $this->db->prepare($sql);
+        $consulta->execute($parametros);
+
+        return $consulta->fetchAll();
+    }
+
+    // Mercado Pago aceptó el reintegro. Solo cambia si seguía pendiente (dos corridas no lo marcan dos veces).
+    public function marcarReintegroHecho(string $numero): bool
+    {
+        $consulta = $this->db->prepare(
+            "UPDATE factura_compra SET reintegro_estado = 'HECHO', reintegro_en = NOW() WHERE numero = ? AND reintegro_estado = 'PENDIENTE'"
+        );
+        $consulta->execute([$numero]);
+
+        return $consulta->rowCount() > 0;
     }
 
     // ---------- Vencimientos ----------
@@ -423,7 +480,8 @@ class CompraRepositorio
     public function canceladasPagadasConComprador(DateTimeImmutable $ahora, ?string $numero = null): array
     {
         $sql = "SELECT f.numero, DATE_FORMAT(f.fecha, '%Y-%m-%d %H:%i:%s') AS fecha, DATE_FORMAT(COALESCE(f.pagar_antes_de, f.fecha + INTERVAL 15 MINUTE), '%Y-%m-%d %H:%i:%s') AS pagar_antes_de, DATE_FORMAT(COALESCE(f.retirar_hasta, DATE(f.fecha) + INTERVAL (CASE WEEKDAY(f.fecha) WHEN 5 THEN 6 WHEN 6 THEN 5 ELSE 7 END) DAY), '%Y-%m-%d') AS retirar_hasta, f.motivo_cancelacion,
-                       DATE_FORMAT(f.cancelada_en, '%Y-%m-%d %H:%i:%s') AS cancelada_en, c.cliente_id, u.nombre
+                       DATE_FORMAT(f.cancelada_en, '%Y-%m-%d %H:%i:%s') AS cancelada_en, c.cliente_id, u.nombre,
+                       f.reintegro_porcentaje, f.reintegro_monto
                 FROM factura_compra f
                 JOIN carrito c ON c.id = f.carrito_id
                 JOIN usuario u ON u.id = c.cliente_id
@@ -480,7 +538,7 @@ class CompraRepositorio
     protected function bloquearFactura(string $numero): ?array
     {
         $consulta = $this->db->prepare(
-            "SELECT f.id, f.numero, f.estado, DATE_FORMAT(f.fecha, '%Y-%m-%d %H:%i:%s') AS fecha, DATE_FORMAT(COALESCE(f.pagar_antes_de, f.fecha + INTERVAL 15 MINUTE), '%Y-%m-%d %H:%i:%s') AS pagar_antes_de, DATE_FORMAT(COALESCE(f.retirar_hasta, DATE(f.fecha) + INTERVAL (CASE WEEKDAY(f.fecha) WHEN 5 THEN 6 WHEN 6 THEN 5 ELSE 7 END) DAY), '%Y-%m-%d') AS retirar_hasta, f.total, f.carrito_id, c.cliente_id
+            "SELECT f.id, f.numero, f.estado, DATE_FORMAT(f.fecha, '%Y-%m-%d %H:%i:%s') AS fecha, DATE_FORMAT(COALESCE(f.pagar_antes_de, f.fecha + INTERVAL 15 MINUTE), '%Y-%m-%d %H:%i:%s') AS pagar_antes_de, DATE_FORMAT(COALESCE(f.retirar_hasta, DATE(f.fecha) + INTERVAL (CASE WEEKDAY(f.fecha) WHEN 5 THEN 6 WHEN 6 THEN 5 ELSE 7 END) DAY), '%Y-%m-%d') AS retirar_hasta, f.total, f.carrito_id, c.cliente_id, " . self::REINTEGRO . "
              FROM factura_compra f JOIN carrito c ON c.id = f.carrito_id
              WHERE f.numero = ? FOR UPDATE"
         );
@@ -587,6 +645,37 @@ class CompraRepositorio
             'tiene_factura' => (bool) ($fila['tiene_factura'] ?? false),
             // Por qué se canceló: COMPRADOR, SIN_PAGO o VENCIDA (solo en las canceladas).
             'motivo_cancelacion' => $estado === 'CANCELADA' ? ($fila['motivo_cancelacion'] ?? null) : null,
+            // Mientras se puede cancelar: cuánto se devolvería (para la política y el "¿Cancelás?").
+            'politica_reintegro' => in_array($estado, ['PENDIENTE_PAGO', 'PAGADA'], true) ? self::politicaDeReintegro($fila) : null,
+            // Cancelada por el comprador después de pagar: cuánto se le devuelve y si ya se hizo.
+            'reintegro' => $estado === 'CANCELADA' && ($fila['reintegro_porcentaje'] ?? null) !== null ? [
+                'porcentaje' => (int) $fila['reintegro_porcentaje'],
+                'monto' => (float) $fila['reintegro_monto'],
+                'estado' => $fila['reintegro_estado'] ?? null,
+            ] : null,
+        ];
+    }
+
+    // La política de reintegro de una compra que todavía se puede cancelar, con los montos.
+    // porcentaje_hoy y monto_hoy: lo que se devolvería si cancela ahora (en una pagada).
+    private static function politicaDeReintegro(array $fila): array
+    {
+        $anticipado = (int) $fila['reintegro_anticipado'];
+        $ultimoMomento = (int) $fila['reintegro_ultimo_momento'];
+        $horas = (int) $fila['reintegro_horas'];
+        $retirarHasta = new DateTimeImmutable($fila['retirar_hasta']);
+        $total = (float) $fila['total'];
+        $hoy = Compra::porcentajeDeReintegro($retirarHasta, new DateTimeImmutable(), $anticipado, $ultimoMomento, $horas);
+
+        return [
+            'anticipado' => $anticipado,
+            'ultimo_momento' => $ultimoMomento,
+            'horas' => $horas,
+            'anticipado_hasta' => Compra::reintegroMayorHasta($retirarHasta, $horas)->format('Y-m-d H:i:s'),
+            'monto_anticipado' => Compra::montoDeReintegro($total, $anticipado),
+            'monto_ultimo_momento' => Compra::montoDeReintegro($total, $ultimoMomento),
+            'porcentaje_hoy' => $hoy,
+            'monto_hoy' => Compra::montoDeReintegro($total, $hoy),
         ];
     }
 }
