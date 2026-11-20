@@ -188,6 +188,42 @@ class Compra
         );
     }
 
+    // Al confirmar ("Ir a pagar"): la compra quedó reservada y hay que pagarla a tiempo.
+    public static function mensajeReservada(string $nombre, string $numero, DateTimeImmutable $fecha): string
+    {
+        return sprintf(
+            '🐾 ¡Hola, %s! Reservamos los productos de tu pedido %s por %d minutos. '
+            . 'Completá el pago con Mercado Pago antes de las %s para que no se cancele.',
+            self::primerNombre($nombre),
+            $numero,
+            self::MINUTOS_PARA_PAGAR,
+            self::pagarAntesDe($fecha)->format('H:i')
+        );
+    }
+
+    // Al pagar: la compra ya está paga y lista para retirar (queda como constancia).
+    public static function mensajePagada(string $nombre, string $numero, DateTimeImmutable $fecha): string
+    {
+        return sprintf(
+            '✅ ¡Hola, %s! Recibimos el pago de tu pedido %s. Ya podés retirarlo en HuellaVet hasta el %s inclusive. ¡Te esperamos!',
+            self::primerNombre($nombre),
+            $numero,
+            self::diaConNombre(self::retirarHasta($fecha))
+        );
+    }
+
+    // A la veterinaria, cuando una compra queda paga: hay un pedido nuevo para retirar.
+    public static function mensajeNuevoPedido(string $comprador, string $numero, float $total, DateTimeImmutable $fecha): string
+    {
+        return sprintf(
+            '🛍️ Nuevo pedido para retirar: %s de %s ($ %s). Fecha límite de retiro: %s.',
+            $numero,
+            trim($comprador),
+            number_format($total, 2, ',', '.'),
+            self::diaConNombre(self::retirarHasta($fecha))
+        );
+    }
+
     // "martes 25/11"
     private static function diaConNombre(DateTimeImmutable $dia): string
     {

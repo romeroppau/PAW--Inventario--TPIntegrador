@@ -3,16 +3,19 @@
 // Manda un aviso al comprador por el buzón de notificaciones de Backend (POST /internal/notificaciones),
 // de proceso a proceso, sin pasar por Nginx. Contrato: docs/api/contrato-tienda.md, "Avisos al comprador".
 //
-// Cada aviso sale por los dos canales: la campana del sitio (WEB) y WhatsApp. Backend no acepta dos
-// notificaciones con el mismo id_operacion, así que cada canal lleva el suyo:
+// Por defecto, cada aviso sale por los dos canales: la campana del sitio (WEB) y WhatsApp. Algunos
+// salen solo por la campana (la reserva de la compra y los avisos a la veterinaria).
+// Backend no acepta dos notificaciones con el mismo id_operacion, así que cada canal lleva el suyo:
 // compra-V-000003-dia2-web y compra-V-000003-dia2-whatsapp. Mandarlo de nuevo no lo repite.
 class Avisos
 {
     private const CANALES = ['web' => 'WEB', 'whatsapp' => 'WHATSAPP'];
+    public const SOLO_CAMPANA = ['web'];
 
     // Devuelve true si el aviso es nuevo, false si ya se había mandado, o null si Backend no lo
     // recibió (falta el token, no respondió o lo rechazó). Los errores quedan en el log.
-    public static function mandar(int $usuarioId, string $mensaje, string $idOperacion, DateTimeImmutable $ahora): ?bool
+    // $canales: 'web' y/o 'whatsapp' (por defecto, los dos).
+    public static function mandar(int $usuarioId, string $mensaje, string $idOperacion, DateTimeImmutable $ahora, array $canales = ['web', 'whatsapp']): ?bool
     {
         $token = Config::get('INTERNAL_TOKEN');
         if (!is_string($token) || $token === '') {
@@ -21,7 +24,7 @@ class Avisos
         }
 
         $nuevo = false;
-        foreach (self::CANALES as $sufijo => $canal) {
+        foreach (array_intersect_key(self::CANALES, array_flip($canales)) as $sufijo => $canal) {
             $resultado = self::llamar($token, [
                 'usuario_id' => $usuarioId,
                 'tipo' => 'COMPRA',

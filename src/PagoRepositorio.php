@@ -74,20 +74,6 @@ class PagoRepositorio extends CompraRepositorio
         return $resultado;
     }
 
-    // El comprador de una compra (para los avisos): ['cliente_id', 'nombre', 'fecha'] o null.
-    public function comprador(string $numero): ?array
-    {
-        $consulta = $this->db->prepare(
-            "SELECT c.cliente_id, u.nombre, DATE_FORMAT(f.fecha, '%Y-%m-%d %H:%i:%s') AS fecha
-             FROM factura_compra f JOIN carrito c ON c.id = f.carrito_id JOIN usuario u ON u.id = c.cliente_id
-             WHERE f.numero = ?"
-        );
-        $consulta->execute([$numero]);
-        $fila = $consulta->fetch();
-
-        return $fila === false ? null : $fila;
-    }
-
     // ---------- Ayudas ----------
 
     // Un pago aprobado: según cómo está la compra, la deja pagada, la revive o hay que devolverlo.

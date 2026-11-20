@@ -161,12 +161,18 @@ class PagoControlador
 
     // ---------- Ayudas ----------
 
-    // Registra el pago y hace lo que sigue: devolver el importe si no se pudo aplicar, y avisarle al
-    // comprador si fue un pago tardío. Devuelve lo que devolvió PagoRepositorio::registrar.
+    // Registra el pago y hace lo que sigue: los avisos de compra paga, devolver el importe si no se
+    // pudo aplicar, y avisarle al comprador si fue un pago tardío. Devuelve lo que devolvió PagoRepositorio::registrar.
     private static function procesar(PagoRepositorio $pagos, array $pago, ?int $compradorId): string
     {
         $resultado = $pagos->registrar($pago, $compradorId);
         $ahora = new DateTimeImmutable();
+
+        // Compra paga: constancia al comprador (salvo el pago tardío, que tiene su propio aviso abajo)
+        // y "nuevo pedido para retirar" a las veterinarias.
+        if ($resultado === 'aprobado' || $resultado === 'revivido') {
+            (new AvisosDeCompra($pagos))->pagada($pago['referencia'], $resultado === 'aprobado');
+        }
 
         if ($resultado === 'devolver' || $resultado === 'revivido') {
             if ($resultado === 'devolver' && !MercadoPago::simulado()) {

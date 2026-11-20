@@ -407,11 +407,21 @@ Las cancelaciones por falta de pago salen a cualquier hora. Las de vencimiento d
 
 **Errores:** `401` sin el token o con otro.
 
-## Avisos al comprador
+## Avisos al comprador y a la veterinaria
 
 Se mandan por `POST /internal/notificaciones` (Backend), con tipo `COMPRA` y por los dos canales (la campana del sitio y WhatsApp). Cada aviso lleva un `id_operacion` fijo, así correr la tarea varias veces no lo repite. Como Backend no acepta dos notificaciones con el mismo `id_operacion`, cada canal agrega el suyo al final: `compra-V-000003-dia2-web` y `compra-V-000003-dia2-whatsapp`.
 
-Cada aviso sale solo en su día, desde las 9:00.
+**Al comprar** (enseguida, a cualquier hora):
+
+| Cuándo | A quién | Canales | `id_operacion` | Mensaje (ejemplo) |
+|---|---|---|---|---|
+| Confirma ("Ir a pagar") | comprador | campana | `compra-V-000003-reservada` | 🐾 ¡Hola, Ana! Reservamos los productos de tu pedido V-000003 por 15 minutos. Completá el pago con Mercado Pago antes de las 10:45 para que no se cancele. |
+| Paga | comprador | campana y WhatsApp (constancia) | `compra-V-000003-pagada` | ✅ ¡Hola, Ana! Recibimos el pago de tu pedido V-000003. Ya podés retirarlo en HuellaVet hasta el miércoles 25/11 inclusive. ¡Te esperamos! |
+| Paga (también un pago tardío que revive la compra) | **cada veterinaria** (todos los usuarios con rol `VETERINARIO`) | campana | `compra-V-000003-pagada-vet-101` (uno por veterinaria) | 🛍️ Nuevo pedido para retirar: V-000003 de Ana Pérez ($ 31.999,80). Fecha límite de retiro: miércoles 25/11. |
+
+Si Backend no responde, la compra sigue igual: el aviso no frena la venta (el error queda en el log).
+
+**Recordatorios y cancelaciones** (la tarea programada): cada aviso sale solo en su día, desde las 9:00.
 
 | Cuándo | `id_operacion` | Mensaje (ejemplo) |
 |---|---|---|
