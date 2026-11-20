@@ -26,14 +26,16 @@ Toca "Ir a pagar" (confirmar)                                        → factura
 | `PUT /api/tienda/carrito/items/{producto_id}` | Comprador | Cambiar la cantidad de un producto |
 | `DELETE /api/tienda/carrito/items/{producto_id}` | Comprador | Quitar un producto |
 | `POST /api/tienda/carrito/confirmar` | Comprador | Confirmar la compra: crea la factura y reserva el stock |
-| `GET /api/tienda/compras` | Comprador | Mis compras |
+| `GET /api/tienda/compras` | Comprador | Mis compras (por fechas, de a 20) |
 | `GET /api/tienda/compras/{numero}` | Comprador | Una compra, con su detalle |
+| `GET /api/tienda/compras/{numero}/factura` | Comprador o Veterinario | La factura de una compra pagada |
 | `POST /api/tienda/compras/{numero}/cancelar` | Comprador | Cancelar la compra (antes de pagar o ya pagada, mientras está para retirar) |
 | `POST /api/tienda/compras/{numero}/pago` | Comprador | Pagar con Mercado Pago: devuelve a dónde ir a pagar |
 | `POST /api/tienda/compras/{numero}/pago/confirmar` | Comprador | Al volver de Mercado Pago: confirma el pago |
 | `POST /api/tienda/pagos/aviso` | Mercado Pago | Aviso de pago (webhook, con firma) |
 | `POST /api/tienda/pagos/simulado` | Comprador | Pago simulado (solo local y GitHub) |
-| `GET /api/inventario/compras` | Veterinario | Pedidos para retirar, entregados y cancelados, con buscador |
+| `GET /api/inventario/compras` | Veterinario | Pedidos para retirar, entregados y cancelados, con buscador (de a 20) |
+| `GET /api/inventario/compras/resumen` | Veterinario | Cuántos pedidos hay para retirar y cuántos tienen hoy su último día |
 | `POST /api/tienda/compras/{numero}/entregada` | Veterinario | Constatar el retiro en el local |
 | `POST /api/tienda/tareas/vencer` | GitHub Actions | Cancelar las compras vencidas y mandar los recordatorios |
 | `GET /api/tienda/promociones` | Público | Los productos en promoción (sección "Promociones" de la tienda) |
@@ -257,12 +259,22 @@ Si algo falla, no se reserva nada.
 
 ## GET /api/tienda/compras
 
-Mis compras, de la más nueva a la más vieja (las canceladas también).
+Mis compras, de la más nueva a la más vieja (las canceladas también), **de a 20**.
+
+**Parámetros (opcionales):**
+
+- `desde` y `hasta` (`AAAA-MM-DD`, inclusive): por la fecha de la compra. Sin ellos, **los últimos 30 días** (hoy incluido); con solo `hasta`, los 30 días que terminan ese día; con solo `desde`, desde ese día hasta hoy.
+- `pagina` (desde 1, por defecto 1): "Ver más" pide la siguiente mientras `hay_mas` sea `true`.
 
 **200 OK:**
 
 ```json
 {
+  "pagina": 1,
+  "por_pagina": 20,
+  "hay_mas": false,
+  "desde": "2026-10-22",
+  "hasta": "2026-11-20",
   "datos": [
     {
       "numero": "V-000003",
@@ -271,12 +283,18 @@ Mis compras, de la más nueva a la más vieja (las canceladas también).
       "total": 31999.80,
       "retirar_hasta": "2026-11-25",
       "pagar_antes_de": null,
-      "segundos_para_pagar": null
+      "segundos_para_pagar": null,
+      "tiene_factura": true
     }
   ]
 }
 ```
 
+`desde` y `hasta` son las fechas que se usaron (las que vinieron o las de por defecto), para mostrarlas en el filtro.
+
+**Errores:** `400 { "error": "Datos inválidos", "campos": { "desde": "…" } }` si una fecha no es `AAAA-MM-DD`, si `desde` es después de `hasta` o si `pagina` no es un entero desde 1.
+
+- `tiene_factura`: si la compra tiene factura (ver `GET /api/tienda/compras/{numero}/factura`), para mostrar "Ver factura". Viene también en el detalle de una compra y en los pedidos de la veterinaria.
 - `pagar_antes_de`: solo en `PENDIENTE_PAGO`; en los demás estados, `null`.
 - `motivo_cancelacion`: solo en `CANCELADA` (si no, `null`): `COMPRADOR` (la canceló el comprador, antes o después de pagar), `SIN_PAGO` (no se pagó en 15 minutos) o `VENCIDA` (venció el plazo de retiro). Texto sugerido: "La canceló el comprador", "No se pagó a tiempo", "Venció el plazo de retiro".
 - `dias_habiles_para_retirar`: los días hábiles de plazo que tuvo esta compra (para el texto de la política).
@@ -290,6 +308,40 @@ Mis compras, de la más nueva a la más vieja (las canceladas también).
 Una compra con sus productos. Mismo formato que la respuesta de confirmar, más `entregada_en` (`null` si todavía no se retiró) y `operacion_mp` (el número de operación de Mercado Pago del pago aprobado, el comprobante; `null` si no se pagó).
 
 **Errores:** `404 { "error": "Compra no encontrada" }` si no existe o es de otro comprador.
+
+---
+
+## GET /api/tienda/compras/{numero}/factura
+
+La factura de una compra, para ver e imprimir. **Solo tienen factura las compras que se pagaron** (con un pago aprobado), aunque después se hayan cancelado: en ese caso se muestra como cancelada. Una compra que no se llegó a pagar no tiene factura. Un pago que llegó tarde y se devolvió no cuenta.
+
+La ve **su comprador** y **cualquier veterinario**.
+
+**200 OK:**
+
+```json
+{
+  "numero": "V-000003",
+  "estado": "PAGADA",
+  "fecha": "2026-11-18 10:30:00",
+  "total": 31999.80,
+  "retirar_hasta": "2026-11-25",
+  "motivo_cancelacion": null,
+  "tiene_factura": true,
+  "comprador": { "nombre": "Ana Pérez", "email": "ana@ejemplo.com" },
+  "pago": { "medio": "Mercado Pago", "operacion": "123456789", "fecha": "2026-11-18 10:34:12" },
+  "entregada_en": null,
+  "entregada_por": null,
+  "cancelada_en": null,
+  "items": [
+    { "producto_id": 101, "nombre": "Alimento Royal Canin Medium Puppy para cachorros 3 kg", "cantidad": 2, "precio_unitario": 15999.90, "subtotal": 31999.80 }
+  ]
+}
+```
+
+Además vienen los mismos campos que en mis compras (`pagar_antes_de`, `segundos_para_pagar`, `dias_habiles_para_retirar`). `entregada_en` y `entregada_por` solo si se retiró; `cancelada_en` solo si se canceló.
+
+**Errores:** `401`/`403` sin sesión o con otro rol; `404 { "error": "Factura no encontrada" }` si la compra no existe, no se pagó o es de otro comprador.
 
 ---
 
@@ -384,6 +436,9 @@ Los pedidos de la veterinaria, en tres pestañas: **Para retirar** (`PAGADA`), *
 **Parámetros (opcionales):**
 
 - `estado` = `PAGADA` (por defecto), `ENTREGADA` o `CANCELADA`. Un valor desconocido se ignora y se usa `PAGADA`.
+- `vence` = `hoy` (solo en Para retirar): solo los pedidos que tienen **hoy su último día** para retirar.
+- `desde` y `hasta` (`AAAA-MM-DD`, inclusive; solo en Entregados y Cancelados): por la fecha de entrega o de cancelación. Sin ellos, **los últimos 30 días**. En Para retirar no se usan (todos los pedidos para retirar están vigentes) y vienen `null` en la respuesta.
+- `pagina` (desde 1): de a **20** pedidos, igual que mis compras.
 - `buscar`: el buscador, dentro de la pestaña elegida. Encuentra por **número de pedido** (por los dígitos del final: `101`, `V-101` y `V-000101` encuentran `V-000101`) o por **nombre del comprador** (cualquier parte, sin importar mayúsculas). Hasta 100 caracteres.
 
 **Orden:** Para retirar, del que vence antes al que vence después. Entregados (por fecha de entrega) y Cancelados (por fecha de cancelación), los más recientes primero (son historial). En Cancelados, cada pedido trae `motivo_cancelacion`.
@@ -392,12 +447,18 @@ Los pedidos de la veterinaria, en tres pestañas: **Para retirar** (`PAGADA`), *
 
 ```json
 {
+  "pagina": 1,
+  "por_pagina": 20,
+  "hay_mas": false,
+  "desde": null,
+  "hasta": null,
   "datos": [
     {
       "numero": "V-000003",
       "estado": "PAGADA",
       "fecha": "2026-11-18 10:30:00",
       "total": 31999.80,
+      "tiene_factura": true,
       "pagar_antes_de": null,
       "segundos_para_pagar": null,
       "retirar_hasta": "2026-11-25",
@@ -409,6 +470,16 @@ Los pedidos de la veterinaria, en tres pestañas: **Para retirar** (`PAGADA`), *
 ```
 
 En la pestaña Entregados, cada pedido trae además `entregada_en` (`"2026-11-20 16:05:00"`) y `entregada_por` (el nombre de la veterinaria que lo entregó).
+
+**Errores:** `400` como en mis compras (fechas o página inválidas).
+
+---
+
+## GET /api/inventario/compras/resumen
+
+Para la pestaña Para retirar, que arranca **sin la lista** (con el buscador): cuántos pedidos hay para retirar y cuántos tienen hoy su último día, sin traerlos.
+
+**200 OK:** `{ "para_retirar": 7, "vencen_hoy": 2 }`
 
 ## POST /api/tienda/compras/{numero}/entregada
 

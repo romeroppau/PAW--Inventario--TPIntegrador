@@ -18,10 +18,12 @@ $router->delete('/api/tienda/carrito/items/{producto_id}', [CarritoControlador::
 $router->post('/api/tienda/carrito/confirmar', [CompraControlador::class, 'confirmar']);
 $router->get('/api/tienda/compras', [CompraControlador::class, 'misCompras']);
 $router->get('/api/tienda/compras/{numero}', [CompraControlador::class, 'ver']);
+$router->get('/api/tienda/compras/{numero}/factura', [CompraControlador::class, 'factura']);
 $router->post('/api/tienda/compras/{numero}/cancelar', [CompraControlador::class, 'cancelar']);
 
 // Retiro en el local (veterinaria).
 $router->get('/api/inventario/compras', [CompraControlador::class, 'deLaVeterinaria']);
+$router->get('/api/inventario/compras/resumen', [CompraControlador::class, 'resumenDeLaVeterinaria']);
 $router->post('/api/tienda/compras/{numero}/entregada', [CompraControlador::class, 'entregada']);
 
 // Tarea programada (GitHub Actions, con X-Tarea-Token): vencimientos y recordatorios.

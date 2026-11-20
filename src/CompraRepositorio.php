@@ -104,25 +104,29 @@ class CompraRepositorio
 
     // ---------- Consultar ----------
 
-    // Las compras de un comprador, de la más nueva a la más vieja.
-    public function delComprador(int $compradorId): array
+    // Las compras de un comprador hechas entre $desde y $hasta (fechas "Y-m-d", inclusive), de la más
+    // nueva a la más vieja, de a $porPagina. Devuelve [compras, hayMas].
+    public function delComprador(int $compradorId, string $desde, string $hasta, int $pagina, int $porPagina): array
     {
         $consulta = $this->db->prepare(
-            "SELECT f.numero, f.estado, DATE_FORMAT(f.fecha, '%Y-%m-%d %H:%i:%s') AS fecha, DATE_FORMAT(COALESCE(f.pagar_antes_de, f.fecha + INTERVAL 15 MINUTE), '%Y-%m-%d %H:%i:%s') AS pagar_antes_de, DATE_FORMAT(COALESCE(f.retirar_hasta, DATE(f.fecha) + INTERVAL (CASE WEEKDAY(f.fecha) WHEN 5 THEN 6 WHEN 6 THEN 5 ELSE 7 END) DAY), '%Y-%m-%d') AS retirar_hasta, f.total, f.motivo_cancelacion
+            "SELECT f.numero, f.estado, DATE_FORMAT(f.fecha, '%Y-%m-%d %H:%i:%s') AS fecha,
+                    DATE_FORMAT(" . self::PAGAR_ANTES_DE . ", '%Y-%m-%d %H:%i:%s') AS pagar_antes_de,
+                    DATE_FORMAT(" . self::RETIRAR_HASTA . ", '%Y-%m-%d') AS retirar_hasta, f.total, f.motivo_cancelacion, (EXISTS (SELECT 1 FROM pago p WHERE p.factura_compra_id = f.id AND p.estado = 'APROBADO')) AS tiene_factura
              FROM factura_compra f JOIN carrito c ON c.id = f.carrito_id
-             WHERE c.cliente_id = ?
-             ORDER BY f.fecha DESC, f.id DESC"
+             WHERE c.cliente_id = ? AND DATE(f.fecha) BETWEEN ? AND ?
+             ORDER BY f.fecha DESC, f.id DESC
+             LIMIT " . ($porPagina + 1) . ' OFFSET ' . (($pagina - 1) * $porPagina)
         );
-        $consulta->execute([$compradorId]);
+        $consulta->execute([$compradorId, $desde, $hasta]);
 
-        return array_map([$this, 'resumen'], $consulta->fetchAll());
+        return self::paginar(array_map([$this, 'resumen'], $consulta->fetchAll()), $porPagina);
     }
 
     // Una compra con sus productos. Con $compradorId, solo si es de ese comprador (si no, null).
     public function detalle(string $numero, ?int $compradorId = null): ?array
     {
         $consulta = $this->db->prepare(
-            "SELECT f.id, f.numero, f.estado, DATE_FORMAT(f.fecha, '%Y-%m-%d %H:%i:%s') AS fecha, DATE_FORMAT(COALESCE(f.pagar_antes_de, f.fecha + INTERVAL 15 MINUTE), '%Y-%m-%d %H:%i:%s') AS pagar_antes_de, DATE_FORMAT(COALESCE(f.retirar_hasta, DATE(f.fecha) + INTERVAL (CASE WEEKDAY(f.fecha) WHEN 5 THEN 6 WHEN 6 THEN 5 ELSE 7 END) DAY), '%Y-%m-%d') AS retirar_hasta, f.total, f.motivo_cancelacion,
+            "SELECT f.id, f.numero, f.estado, DATE_FORMAT(f.fecha, '%Y-%m-%d %H:%i:%s') AS fecha, DATE_FORMAT(COALESCE(f.pagar_antes_de, f.fecha + INTERVAL 15 MINUTE), '%Y-%m-%d %H:%i:%s') AS pagar_antes_de, DATE_FORMAT(COALESCE(f.retirar_hasta, DATE(f.fecha) + INTERVAL (CASE WEEKDAY(f.fecha) WHEN 5 THEN 6 WHEN 6 THEN 5 ELSE 7 END) DAY), '%Y-%m-%d') AS retirar_hasta, f.total, f.motivo_cancelacion, (EXISTS (SELECT 1 FROM pago p WHERE p.factura_compra_id = f.id AND p.estado = 'APROBADO')) AS tiene_factura,
                     DATE_FORMAT(f.entregada_en, '%Y-%m-%d %H:%i:%s') AS entregada_en, c.cliente_id,
                     (SELECT p.id_externo FROM pago p WHERE p.factura_compra_id = f.id AND p.estado = 'APROBADO'
                      ORDER BY p.id DESC LIMIT 1) AS operacion_mp
@@ -170,10 +174,13 @@ class CompraRepositorio
     // ---------- Veterinaria ----------
 
     // Pedidos de una pestaña de la veterinaria (PAGADA, ENTREGADA o CANCELADA), con el comprador y
-    // sus productos. Con $buscar, solo los que coinciden por número de pedido o nombre del comprador.
-    // Para retirar: del que vence antes al que vence después (el plazo sale de la fecha).
-    // Entregados y cancelados (historial): los más recientes primero.
-    public function deLaVeterinaria(string $estado, string $buscar = ''): array
+    // sus productos, de a $porPagina. Devuelve [pedidos, hayMas].
+    // - $buscar: número de pedido o nombre del comprador.
+    // - Para retirar (PAGADA): del que vence antes al que vence después; con $venceHoy, solo los que
+    //   tienen hoy su último día para retirar.
+    // - Entregados y cancelados (historial): entre $desde y $hasta (por la fecha de entrega o de
+    //   cancelación), los más recientes primero.
+    public function deLaVeterinaria(string $estado, string $buscar, ?string $desde, ?string $hasta, bool $venceHoy, int $pagina, int $porPagina): array
     {
         $orden = match ($estado) {
             'PAGADA' => self::RETIRAR_HASTA . ', f.fecha, f.id',
@@ -182,7 +189,7 @@ class CompraRepositorio
         };
 
         $sql = "SELECT f.id, f.numero, f.estado, DATE_FORMAT(f.fecha, '%Y-%m-%d %H:%i:%s') AS fecha, DATE_FORMAT(COALESCE(f.pagar_antes_de, f.fecha + INTERVAL 15 MINUTE), '%Y-%m-%d %H:%i:%s') AS pagar_antes_de, DATE_FORMAT(COALESCE(f.retirar_hasta, DATE(f.fecha) + INTERVAL (CASE WEEKDAY(f.fecha) WHEN 5 THEN 6 WHEN 6 THEN 5 ELSE 7 END) DAY), '%Y-%m-%d') AS retirar_hasta, f.total,
-                       f.motivo_cancelacion, u.nombre AS comprador,
+                       f.motivo_cancelacion, (EXISTS (SELECT 1 FROM pago p WHERE p.factura_compra_id = f.id AND p.estado = 'APROBADO')) AS tiene_factura, u.nombre AS comprador,
                        DATE_FORMAT(f.entregada_en, '%Y-%m-%d %H:%i:%s') AS entregada_en, v.nombre AS entregada_por
                 FROM factura_compra f
                 JOIN carrito c ON c.id = f.carrito_id
@@ -190,6 +197,16 @@ class CompraRepositorio
                 LEFT JOIN usuario v ON v.id = f.entregada_por
                 WHERE f.estado = ?";
         $parametros = [$estado];
+
+        if ($estado === 'PAGADA' && $venceHoy) {
+            $sql .= ' AND ' . self::RETIRAR_HASTA . ' = CURDATE()';
+        }
+        if ($estado !== 'PAGADA' && $desde !== null && $hasta !== null) {
+            $sql .= $estado === 'ENTREGADA'
+                ? ' AND DATE(f.entregada_en) BETWEEN ? AND ?'
+                : ' AND DATE(COALESCE(f.cancelada_en, f.fecha)) BETWEEN ? AND ?';
+            array_push($parametros, $desde, $hasta);
+        }
 
         if ($buscar !== '') {
             // El número se busca por los dígitos del final: "101", "V-101" y "V-000101" encuentran V-000101.
@@ -204,10 +221,10 @@ class CompraRepositorio
             $sql .= ' AND (' . implode(' OR ', $condiciones) . ')';
         }
 
-        $consulta = $this->db->prepare("$sql ORDER BY $orden");
+        $consulta = $this->db->prepare("$sql ORDER BY $orden LIMIT " . ($porPagina + 1) . ' OFFSET ' . (($pagina - 1) * $porPagina));
         $consulta->execute($parametros);
 
-        return array_map(function (array $fila) use ($estado) {
+        return self::paginar(array_map(function (array $fila) use ($estado) {
             $compra = $this->resumen($fila);
             $compra['comprador'] = $fila['comprador'];
             if ($estado === 'ENTREGADA') {
@@ -219,7 +236,57 @@ class CompraRepositorio
                 $this->itemsDeFactura((int) $fila['id'])
             );
             return $compra;
-        }, $consulta->fetchAll());
+        }, $consulta->fetchAll()), $porPagina);
+    }
+
+    // Para la pantalla de la veterinaria, sin traer los pedidos: cuántos hay para retirar y cuántos
+    // tienen hoy su último día.
+    public function conteoParaRetirar(): array
+    {
+        $fila = $this->db->query(
+            "SELECT COUNT(*) AS para_retirar, SUM(" . self::RETIRAR_HASTA . " = CURDATE()) AS vencen_hoy
+             FROM factura_compra f WHERE f.estado = 'PAGADA'"
+        )->fetch();
+
+        return ['para_retirar' => (int) $fila['para_retirar'], 'vencen_hoy' => (int) ($fila['vencen_hoy'] ?? 0)];
+    }
+
+    // La factura de una compra: solo si se pagó (tiene un pago aprobado), aunque después se haya
+    // cancelado. Con $compradorId, solo si es de ese comprador. null si no hay factura.
+    public function factura(string $numero, ?int $compradorId = null): ?array
+    {
+        $consulta = $this->db->prepare(
+            "SELECT f.id, f.numero, f.estado, DATE_FORMAT(f.fecha, '%Y-%m-%d %H:%i:%s') AS fecha,
+                    DATE_FORMAT(" . self::PAGAR_ANTES_DE . ", '%Y-%m-%d %H:%i:%s') AS pagar_antes_de,
+                    DATE_FORMAT(" . self::RETIRAR_HASTA . ", '%Y-%m-%d') AS retirar_hasta,
+                    f.total, f.motivo_cancelacion, DATE_FORMAT(f.entregada_en, '%Y-%m-%d %H:%i:%s') AS entregada_en,
+                    DATE_FORMAT(f.cancelada_en, '%Y-%m-%d %H:%i:%s') AS cancelada_en,
+                    c.cliente_id, u.nombre AS comprador, u.email, v.nombre AS entregada_por,
+                    p.id_externo AS operacion, DATE_FORMAT(p.fecha, '%Y-%m-%d %H:%i:%s') AS pagada_en
+             FROM factura_compra f
+             JOIN carrito c ON c.id = f.carrito_id
+             JOIN usuario u ON u.id = c.cliente_id
+             LEFT JOIN usuario v ON v.id = f.entregada_por
+             JOIN pago p ON p.id = (SELECT MAX(p2.id) FROM pago p2 WHERE p2.factura_compra_id = f.id AND p2.estado = 'APROBADO')
+             WHERE f.numero = ?"
+        );
+        $consulta->execute([$numero]);
+        $fila = $consulta->fetch();
+
+        if ($fila === false || ($compradorId !== null && (int) $fila['cliente_id'] !== $compradorId)) {
+            return null;
+        }
+
+        $compra = $this->resumen($fila + ['tiene_factura' => 1]);
+
+        return $compra + [
+            'comprador' => ['nombre' => $fila['comprador'], 'email' => $fila['email']],
+            'pago' => ['medio' => 'Mercado Pago', 'operacion' => $fila['operacion'], 'fecha' => $fila['pagada_en']],
+            'entregada_en' => $fila['entregada_en'],
+            'entregada_por' => $fila['entregada_por'],
+            'cancelada_en' => $fila['cancelada_en'],
+            'items' => $this->itemsDeFactura((int) $fila['id']),
+        ];
     }
 
     // La veterinaria constata el retiro en el local: PAGADA → ENTREGADA (con cuándo y quién),
@@ -470,6 +537,12 @@ class CompraRepositorio
         ], $consulta->fetchAll());
     }
 
+    // De una lista con un elemento de más (se pidió $porPagina + 1), devuelve [los $porPagina, hayMas].
+    protected static function paginar(array $filas, int $porPagina): array
+    {
+        return [array_slice($filas, 0, $porPagina), count($filas) > $porPagina];
+    }
+
     // Un id_operacion que todavía no se usó: el base, o el base con -2, -3... Hace falta cuando una
     // compra se cancela, se revive con un pago tardío y se vuelve a cancelar. Se llama dentro de la
     // transacción, con la factura bloqueada: nadie más registra movimientos de esa compra mientras tanto.
@@ -510,6 +583,8 @@ class CompraRepositorio
             'retirar_hasta' => in_array($estado, ['PENDIENTE_PAGO', 'PAGADA'], true) ? $fila['retirar_hasta'] : null,
             // Los días hábiles de plazo que tuvo esta compra (para el texto de la política).
             'dias_habiles_para_retirar' => Compra::diasHabilesEntre(new DateTimeImmutable($fila['fecha']), new DateTimeImmutable($fila['retirar_hasta'])),
+            // Si tiene factura (se pagó, aunque después se haya cancelado): para el enlace "Ver factura".
+            'tiene_factura' => (bool) ($fila['tiene_factura'] ?? false),
             // Por qué se canceló: COMPRADOR, SIN_PAGO o VENCIDA (solo en las canceladas).
             'motivo_cancelacion' => $estado === 'CANCELADA' ? ($fila['motivo_cancelacion'] ?? null) : null,
         ];
