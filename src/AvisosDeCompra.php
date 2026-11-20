@@ -3,8 +3,8 @@
 // Los avisos que salen en el momento de comprar (contrato: docs/api/contrato-tienda.md, "Avisos"):
 //
 //   Momento                         A quién                  Canales
-//   Paga (o se aplica un pago       comprador                campana y WhatsApp (constancia del pago)
-//   tardío, que ya tiene su aviso)  cada veterinaria         campana ("nuevo pedido para retirar")
+//   Paga (también un pago tardío    comprador                campana y WhatsApp (constancia del pago)
+//   que se pudo usar)               cada veterinaria         campana ("nuevo pedido para retirar")
 //
 // Al confirmar ("Ir a pagar") no se avisa: en ese momento el comprador ya está yendo a Mercado Pago
 // y vería el aviso recién a la vuelta, cuando ya no sirve.
@@ -18,9 +18,8 @@ class AvisosDeCompra
     {
     }
 
-    // La compra quedó paga. Con $avisarComprador = false (pago tardío, que ya le avisó el suyo) solo
-    // se avisa a las veterinarias.
-    public function pagada(string $numero, bool $avisarComprador = true): void
+    // La compra quedó paga: la constancia al comprador y el aviso a cada veterinaria.
+    public function pagada(string $numero): void
     {
         $compra = $this->compras->comprador($numero);
         if ($compra === null) {
@@ -29,9 +28,7 @@ class AvisosDeCompra
         $fecha = new DateTimeImmutable($compra['fecha']);
         $ahora = new DateTimeImmutable();
 
-        if ($avisarComprador) {
-            Avisos::mandar((int) $compra['cliente_id'], Compra::mensajePagada($compra['nombre'], $numero, $fecha), "compra-$numero-pagada", $ahora);
-        }
+        Avisos::mandar((int) $compra['cliente_id'], Compra::mensajePagada($compra['nombre'], $numero, $fecha), "compra-$numero-pagada", $ahora);
 
         $mensaje = Compra::mensajeNuevoPedido($compra['nombre'], $numero, (float) $compra['total'], $fecha);
         foreach ($this->compras->veterinarias() as $veterinariaId) {

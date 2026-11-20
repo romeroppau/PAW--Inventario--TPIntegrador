@@ -9,6 +9,9 @@ class Compra
 {
     // Plazos (contrato, "Plazos").
     public const MINUTOS_PARA_PAGAR = 15;
+    // El link de Mercado Pago vence este margen ANTES que la compra: así un pago que empezó a tiempo
+    // tiene un minuto para terminar antes de que la compra se cancele (casi no hay pagos tardíos).
+    public const MINUTOS_DE_MARGEN_DEL_LINK = 1;
     public const DIAS_HABILES_PARA_RETIRAR = 5;
 
     // Los recordatorios y las cancelaciones por vencimiento salen desde esta hora (no de madrugada).
@@ -33,6 +36,12 @@ class Compra
     public static function pagarAntesDe(DateTimeImmutable $fecha): DateTimeImmutable
     {
         return $fecha->modify('+' . self::MINUTOS_PARA_PAGAR . ' minutes');
+    }
+
+    // Hasta cuándo se puede EMPEZAR a pagar en Mercado Pago: 1 minuto antes de que venza la compra.
+    public static function linkDePagoVence(DateTimeImmutable $fecha): DateTimeImmutable
+    {
+        return self::pagarAntesDe($fecha)->modify('-' . self::MINUTOS_DE_MARGEN_DEL_LINK . ' minutes');
     }
 
     // El día hábil número $n después de la fecha (lunes a viernes; los feriados no se cuentan).
@@ -164,28 +173,21 @@ class Compra
         );
     }
 
-    // El pago llegó con la compra ya cancelada, pero había stock: la compra quedó lista para retirar.
-    public static function mensajePagoTardioAplicado(string $nombre, string $numero, DateTimeImmutable $fecha): string
+    // Un pago que no se pudo usar y se devolvió. El texto depende de cómo estaba la compra:
+    // - CANCELADA: el pago llegó cuando ya había terminado el tiempo para pagar y otro se llevó el stock;
+    // - PAGADA o ENTREGADA: el pedido ya estaba pagado (pagó dos veces, por ejemplo desde otra pestaña);
+    // - otro caso (no debería pasar): un texto general.
+    // Si el pago tardío sí se pudo usar, no hay un aviso especial: le llega el de "Recibimos el pago".
+    public static function mensajePagoDevuelto(string $nombre, string $numero, string $estadoCompra): string
     {
-        return sprintf(
-            '🐾 ¡Hola, %s! Tu pago del pedido %s llegó después de que terminara el tiempo para pagar, '
-            . 'pero todavía teníamos tus productos: el pedido quedó listo para retirar hasta el %s inclusive. ¡Te esperamos!',
-            self::primerNombre($nombre),
-            $numero,
-            self::diaConNombre(self::retirarHasta($fecha))
-        );
-    }
+        $motivo = match ($estadoCompra) {
+            'CANCELADA' => "Tu pago del pedido $numero llegó cuando ya había terminado el tiempo para pagar y, mientras tanto, "
+                . 'otra persona compró los productos que habías elegido y no quedó stock, así que te devolvimos el dinero.',
+            'PAGADA', 'ENTREGADA' => "Tu pedido $numero ya estaba pagado, así que te devolvimos el pago que hiciste de más.",
+            default => "No pudimos usar tu pago del pedido $numero, así que te devolvimos el dinero.",
+        };
 
-    // El pago no se pudo aplicar (la compra ya estaba cancelada y no quedaba stock, o ya estaba pagada):
-    // se devuelve el importe.
-    public static function mensajePagoDevuelto(string $nombre, string $numero): string
-    {
-        return sprintf(
-            'Hola, %s. No pudimos aplicar tu pago al pedido %s porque la compra ya estaba cancelada o ya estaba pagada, '
-            . 'así que te devolvimos el importe. Puede tardar unos días en verse en tu medio de pago. 🐾',
-            self::primerNombre($nombre),
-            $numero
-        );
+        return sprintf('Hola, %s. %s Puede tardar unos días en verse en tu medio de pago. 🐾', self::primerNombre($nombre), $motivo);
     }
 
     // Al pagar: la compra ya está paga y lista para retirar (queda como constancia).

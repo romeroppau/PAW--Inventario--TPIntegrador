@@ -17,6 +17,14 @@ class CompraTest extends TestCase
         $this->assertSame('V-001234', Compra::numero(1234));
     }
 
+    public function testElLinkDeMercadoPagoVenceUnMinutoAntesQueLaCompra(): void
+    {
+        $confirmada = $this->fecha('2026-11-18 10:30:00');
+
+        $this->assertEquals($this->fecha('2026-11-18 10:44:00'), Compra::linkDePagoVence($confirmada));
+        $this->assertEquals($this->fecha('2026-11-18 10:45:00'), Compra::pagarAntesDe($confirmada));
+    }
+
     public function testHayQuinceMinutosParaPagar(): void
     {
         $confirmada = $this->fecha('2026-11-18 10:30:00');
@@ -103,17 +111,17 @@ class CompraTest extends TestCase
         $this->assertStringNotContainsString("\n", $pagada . $vet);
     }
 
-    public function testLosAvisosDelPagoTardio(): void
+    public function testElAvisoDelPagoDevueltoDiceElMotivoEnPalabrasSimples(): void
     {
-        $confirmada = $this->fecha('2026-11-18 10:30:00');   // último día para retirar: miércoles 25
+        $vencido = Compra::mensajePagoDevuelto('Ana Pérez', 'V-000010', 'CANCELADA');
+        $this->assertSame('Hola, Ana. Tu pago del pedido V-000010 llegó cuando ya había terminado el tiempo para pagar y, mientras tanto, otra persona compró los productos que habías elegido y no quedó stock, así que te devolvimos el dinero. Puede tardar unos días en verse en tu medio de pago. 🐾', $vencido);
 
-        $aplicado = Compra::mensajePagoTardioAplicado('Ana Pérez', 'V-000010', $confirmada);
-        $this->assertStringContainsString('¡Hola, Ana!', $aplicado);
-        $this->assertStringContainsString('listo para retirar hasta el miércoles 25/11 inclusive', $aplicado);
+        $yaPagado = Compra::mensajePagoDevuelto('Ana Pérez', 'V-000010', 'PAGADA');
+        $this->assertStringContainsString('Tu pedido V-000010 ya estaba pagado, así que te devolvimos el pago que hiciste de más.', $yaPagado);
 
-        $devuelto = Compra::mensajePagoDevuelto('Ana Pérez', 'V-000010');
-        $this->assertStringContainsString('te devolvimos el importe', $devuelto);
-        $this->assertStringNotContainsString("\n", $aplicado . $devuelto);
+        $otro = Compra::mensajePagoDevuelto('Ana Pérez', 'V-000010', 'PENDIENTE_PAGO');
+        $this->assertStringContainsString('te devolvimos el dinero', $otro);
+        $this->assertStringNotContainsString("\n", $vencido . $yaPagado . $otro);
     }
 
     public function testElAvisoDeQueElCompradorCanceloDiceQueNoSeReintegra(): void

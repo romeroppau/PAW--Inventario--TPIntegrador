@@ -128,11 +128,11 @@ class CompraRepositorio
 
     // ---------- Para los avisos ----------
 
-    // El comprador de una compra, con lo que necesitan los avisos: ['cliente_id', 'nombre', 'fecha', 'total'] o null.
+    // El comprador de una compra, con lo que necesitan los avisos: ['cliente_id', 'nombre', 'fecha', 'total', 'estado'] o null.
     public function comprador(string $numero): ?array
     {
         $consulta = $this->db->prepare(
-            "SELECT c.cliente_id, u.nombre, DATE_FORMAT(f.fecha, '%Y-%m-%d %H:%i:%s') AS fecha, f.total
+            "SELECT c.cliente_id, u.nombre, DATE_FORMAT(f.fecha, '%Y-%m-%d %H:%i:%s') AS fecha, f.total, f.estado
              FROM factura_compra f JOIN carrito c ON c.id = f.carrito_id JOIN usuario u ON u.id = c.cliente_id
              WHERE f.numero = ?"
         );

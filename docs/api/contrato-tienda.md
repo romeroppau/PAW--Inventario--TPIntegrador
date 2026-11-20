@@ -20,7 +20,8 @@ Toca "Ir a pagar" (confirmar)                                        → factura
 
 | Método y ruta | Quién | Para qué |
 |---|---|---|
-| `GET /api/tienda/carrito` | Comprador | Ver su carrito abierto, con el total |
+| `GET /api/tienda/carrito` | Comprador | Ver su carrito abierto, con el total y los plazos |
+| `GET /api/tienda/productos/{id}/imagen` | Público | La foto de un producto, como imagen |
 | `POST /api/tienda/carrito/items` | Comprador | Agregar un producto |
 | `PUT /api/tienda/carrito/items/{producto_id}` | Comprador | Cambiar la cantidad de un producto |
 | `DELETE /api/tienda/carrito/items/{producto_id}` | Comprador | Quitar un producto |
@@ -116,15 +117,26 @@ El carrito abierto del comprador. Si todavía no tiene uno, responde un carrito 
       "cantidad": 2,
       "subtotal": 31999.80,
       "stock": 20,
-      "a_la_venta": true
+      "a_la_venta": true,
+      "tiene_imagen": true
     }
   ],
-  "total": 31999.80
+  "total": 31999.80,
+  "minutos_para_pagar": 15,
+  "retirar_hasta_si_compra_hoy": "2026-11-25"
 }
 ```
 
 - `stock`: lo que hay disponible hoy, para que la pantalla no ofrezca más.
 - `a_la_venta`: `false` si el producto se dio de baja o venció después de agregarlo. La pantalla avisa que hay que quitarlo: así no se puede confirmar.
+- `tiene_imagen`: si el producto tiene foto. La foto se pide aparte, con `GET /api/tienda/productos/{id}/imagen`.
+- `minutos_para_pagar` y `retirar_hasta_si_compra_hoy`: para explicar los plazos antes de pagar ("tenés 15 minutos para pagar" y "retirás hasta el miércoles 25/11"). Vienen también con el carrito vacío.
+
+## GET /api/tienda/productos/{id}/imagen
+
+Público. La foto de un producto **como imagen** (no dentro de un JSON), para usarla directo en `<img src="/api/tienda/productos/101/imagen">`. Responde con su tipo (`image/png`, `image/jpeg` o `image/webp`). El navegador la guarda, pero antes de usarla pregunta si cambió (`Cache-Control: no-cache` y `ETag`): si es la misma, `304` sin la foto; si la veterinaria la cambió, la nueva. La usan el catálogo y el carrito. Funciona aunque el producto ya no esté a la venta (el carrito puede tener uno que se dio de baja).
+
+**Errores:** `404 { "error": "Imagen no encontrada" }` si el producto no existe o no tiene foto.
 
 ---
 
@@ -293,12 +305,12 @@ La compra pasa a pagada solo cuando **nuestro servidor consulta el pago a Mercad
 | Pago | Compra | Se registra el pago como | Aviso al comprador |
 |---|---|---|---|
 | Aprobado, compra esperando el pago | `PAGADA` | `APROBADO` | — |
-| Aprobado, compra ya cancelada (pago tardío) y **hay stock** | `PAGADA` otra vez (el stock se reserva de nuevo, movimiento `revive-V-…`) | `APROBADO` | "el pedido quedó listo para retirar" |
-| Aprobado, compra cancelada **sin stock**, ya pagada con otro pago o por otro monto | sin cambios | `DEVUELTO` (se pide la devolución a Mercado Pago) | "te devolvimos el importe" |
+| Aprobado, compra ya cancelada (pago tardío) y **hay stock** | `PAGADA` otra vez (el stock se reserva de nuevo, movimiento `revive-V-…`) | `APROBADO` | el mismo de un pago a tiempo: "Recibimos el pago de tu pedido…" (al cliente no le hace falta saber que llegó tarde) |
+| Aprobado, compra cancelada **sin stock**, ya pagada con otro pago o por otro monto | sin cambios | `DEVUELTO` (se pide la devolución a Mercado Pago) | según el caso: "Tu pago del pedido V-… llegó cuando ya había terminado el tiempo para pagar y, mientras tanto, otra persona compró los productos que habías elegido y no quedó stock, así que te devolvimos el dinero." o "Tu pedido V-… ya estaba pagado, así que te devolvimos el pago que hiciste de más." |
 | Rechazado | sigue `PENDIENTE_PAGO` (puede reintentar mientras le quede tiempo) | `RECHAZADO` | — |
 | Pendiente o en proceso | sin cambios (se espera el próximo aviso) | — | — |
 
-La preferencia: los productos de la compra, `external_reference` = el número de la compra, vence junto con la compra (`expiration_date_to` = `pagar_antes_de`), **sin efectivo** (`ticket` y `atm` excluidos), **una sola cuota**, `binary_mode` (aprobado o rechazado al instante), vuelta a `tienda/compra.html?numero=V-…` y aviso a `/api/tienda/pagos/aviso`.
+La preferencia: los productos de la compra, `external_reference` = el número de la compra, vence **1 minuto antes** que la compra (`expiration_date_to` = `pagar_antes_de` − 1 minuto: un pago que empezó a tiempo tiene ese minuto para terminar antes de que la compra se cancele, así casi no hay pagos tardíos), **sin efectivo** (`ticket` y `atm` excluidos), **una sola cuota**, `binary_mode` (aprobado o rechazado al instante), vuelta a `tienda/compra.html?numero=V-…` y aviso a `/api/tienda/pagos/aviso`.
 
 ## POST /api/tienda/compras/{numero}/pago
 
@@ -306,7 +318,7 @@ Comprador, con CSRF. Crea el pago y devuelve a dónde va el comprador.
 
 **200 OK:** `{ "url": "https://www.mercadopago.com.ar/checkout/..." }`. En local y en GitHub (`ENTORNO` = `local` o `ci`): `{ "url": "/tienda/pago-simulado.html?numero=V-…" }`.
 
-**Errores:** `404` si no existe o es de otro comprador; `409 { "error": "La compra no está esperando el pago" }` (ya pagada, cancelada o vencidos los 15 minutos); `503` si Mercado Pago no está configurado; `502` si Mercado Pago no respondió.
+**Errores:** `404` si no existe o es de otro comprador; `409 { "error": "La compra no está esperando el pago" }` (ya pagada, cancelada o vencidos los 15 minutos); `409 { "error": "Ya no queda tiempo para pagar esta compra" }` si queda menos de 1 minuto (el link vencería enseguida); `503` si Mercado Pago no está configurado; `502` si Mercado Pago no respondió.
 
 ## POST /api/tienda/compras/{numero}/pago/confirmar
 
@@ -415,8 +427,8 @@ Se mandan por `POST /internal/notificaciones` (Backend), con tipo `COMPRA` y por
 
 | Cuándo | A quién | Canales | `id_operacion` | Mensaje (ejemplo) |
 |---|---|---|---|---|
-| Paga | comprador | campana y WhatsApp (constancia) | `compra-V-000003-pagada` | ✅ ¡Hola, Ana! Recibimos el pago de tu pedido V-000003. Ya podés retirarlo en HuellaVet hasta el miércoles 25/11 inclusive. ¡Te esperamos! |
-| Paga (también un pago tardío que revive la compra) | **cada veterinaria** (todos los usuarios con rol `VETERINARIO`) | campana | `compra-V-000003-pagada-vet-101` (uno por veterinaria) | 🛍️ Nuevo pedido para retirar: V-000003 de Ana Pérez ($ 31.999,80). Fecha límite de retiro: miércoles 25/11. |
+| Paga (también un pago tardío que se pudo usar) | comprador | campana y WhatsApp (constancia) | `compra-V-000003-pagada` | ✅ ¡Hola, Ana! Recibimos el pago de tu pedido V-000003. Ya podés retirarlo en HuellaVet hasta el miércoles 25/11 inclusive. ¡Te esperamos! |
+| Paga (también un pago tardío que se pudo usar) | **cada veterinaria** (todos los usuarios con rol `VETERINARIO`) | campana | `compra-V-000003-pagada-vet-101` (uno por veterinaria) | 🛍️ Nuevo pedido para retirar: V-000003 de Ana Pérez ($ 31.999,80). Fecha límite de retiro: miércoles 25/11. |
 
 Si Backend no responde, la compra sigue igual: el aviso no frena la venta (el error queda en el log).
 
