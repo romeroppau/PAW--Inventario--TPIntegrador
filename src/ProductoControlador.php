@@ -68,7 +68,11 @@ class ProductoControlador
     {
         self::veterinario();
 
-        Response::json(['datos' => self::repositorio()->listarTodos()]);
+        Response::json([
+            'datos' => self::repositorio()->listarTodos(),
+            // El mismo límite que los insumos, para el filtro "solo stock bajo" (Entrega 5).
+            'limite_stock_bajo' => Insumo::limiteStockBajo(),
+        ]);
     }
 
     // GET /api/inventario/productos/{id}
@@ -218,6 +222,24 @@ class ProductoControlador
         }
 
         Response::json(['datos' => $productos->movimientos($id)]);
+    }
+
+    // GET /api/inventario/productos/movimientos?producto=&desde=&hasta=
+    // Los movimientos de todos los productos (o de uno), con el filtro de fechas: la pantalla
+    // "Productos → Movimientos" de la veterinaria.
+    public static function todosLosMovimientos(): void
+    {
+        self::veterinario();
+
+        $query = Request::query();
+        $producto = self::id(['id' => $query['producto'] ?? '']);
+        [$desde, $hasta, $errores] = ReferenciaMovimiento::fechas($query['desde'] ?? null, $query['hasta'] ?? null);
+        if ($errores !== []) {
+            Response::json(['error' => 'Datos inválidos', 'campos' => $errores], 400);
+            return;
+        }
+
+        Response::json(['datos' => self::repositorio()->todosLosMovimientos($producto, $desde, $hasta)]);
     }
 
     // GET /api/inventario/salud

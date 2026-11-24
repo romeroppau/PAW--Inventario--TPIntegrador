@@ -172,18 +172,30 @@ class InsumoRepositorio
 
     // Historial de movimientos de insumos, del más reciente al más antiguo, con el insumo y el
     // nombre de quien lo registró. Con un id, solo los de ese insumo; con null, los de todos.
-    public function movimientos(?int $insumoId = null): array
+    // Los movimientos de los insumos (o de uno), del más reciente al más antiguo. $desde y $hasta
+    // (AAAA-MM-DD, inclusive) filtran por el día del movimiento. Cada uno trae de dónde salió
+    // (consulta_id o compra, ReferenciaMovimiento).
+    public function movimientos(?int $insumoId = null, ?string $desde = null, ?string $hasta = null): array
     {
         $sql = "SELECT m.id, DATE_FORMAT(m.fecha, '%Y-%m-%d %H:%i:%s') AS fecha, m.tipo, m.motivo, m.cantidad,
-                       m.insumo_id, i.nombre AS insumo, u.nombre AS usuario
+                       m.insumo_id, i.nombre AS insumo, u.nombre AS usuario, m.id_operacion
                 FROM movimiento_inventario m
                 JOIN insumo i ON i.id = m.insumo_id
-                LEFT JOIN usuario u ON u.id = m.usuario_id";
+                LEFT JOIN usuario u ON u.id = m.usuario_id
+                WHERE 1 = 1";
         $parametros = [];
 
         if ($insumoId !== null) {
-            $sql .= ' WHERE m.insumo_id = ?';
+            $sql .= ' AND m.insumo_id = ?';
             $parametros[] = $insumoId;
+        }
+        if ($desde !== null) {
+            $sql .= ' AND m.fecha >= ?';
+            $parametros[] = $desde . ' 00:00:00';
+        }
+        if ($hasta !== null) {
+            $sql .= ' AND m.fecha < ? + INTERVAL 1 DAY';
+            $parametros[] = $hasta;
         }
 
         $consulta = $this->db->prepare($sql . ' ORDER BY m.fecha DESC, m.id DESC');
@@ -198,7 +210,7 @@ class InsumoRepositorio
             'insumo_id' => (int) $fila['insumo_id'],
             'insumo' => $fila['insumo'],
             'usuario' => $fila['usuario'],
-        ], $consulta->fetchAll());
+        ] + ReferenciaMovimiento::de($fila['id_operacion']), $consulta->fetchAll());
     }
 
     // Lee el insumo y BLOQUEA su fila hasta el final de la transacción (FOR UPDATE).

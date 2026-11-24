@@ -17,7 +17,11 @@ class InsumoControlador
 
         $insumos = self::repositorio()->listarTodos();
 
-        Response::json(['datos' => array_map(fn (Insumo $insumo) => $insumo->aJson(), $insumos)]);
+        Response::json([
+            'datos' => array_map(fn (Insumo $insumo) => $insumo->aJson(), $insumos),
+            // Para el filtro "solo stock bajo" y el texto del listado (Entrega 5).
+            'limite_stock_bajo' => Insumo::limiteStockBajo(),
+        ]);
     }
 
     // GET /api/inventario/insumos/{id}
@@ -208,9 +212,15 @@ class InsumoControlador
     {
         self::veterinario();
 
-        $filtro = self::id(['id' => Request::query()['insumo'] ?? '']);
+        $query = Request::query();
+        $filtro = self::id(['id' => $query['insumo'] ?? '']);
+        [$desde, $hasta, $errores] = ReferenciaMovimiento::fechas($query['desde'] ?? null, $query['hasta'] ?? null);
+        if ($errores !== []) {
+            Response::json(['error' => 'Datos inválidos', 'campos' => $errores], 400);
+            return;
+        }
 
-        Response::json(['datos' => self::repositorio()->movimientos($filtro)]);
+        Response::json(['datos' => self::repositorio()->movimientos($filtro, $desde, $hasta)]);
     }
 
     // ---------- Ayudas ----------
@@ -235,7 +245,7 @@ class InsumoControlador
 
         // Solo se marca un insumo con stock bajo: con stock suficiente no hay nada que pedir.
         if ($pedido && !$actualizado->pedido) {
-            Response::json(['error' => 'Solo se marca como pedido un insumo con stock bajo (10 o menos)'], 409);
+            Response::json(['error' => 'Solo se marca como pedido un insumo con stock bajo (' . Insumo::limiteStockBajo() . ' o menos)'], 409);
             return;
         }
 
