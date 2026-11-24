@@ -14,7 +14,9 @@ class Insumo
         public string $nombre,
         public int $stock,
         public float $costo,
-        public bool $activo
+        public bool $activo,
+        // true si el veterinario lo marcó "Ya pedido" al proveedor. Se borra al cargar stock.
+        public bool $pedido = false
     ) {
     }
 
@@ -26,14 +28,32 @@ class Insumo
             $fila['nombre'],
             (int) $fila['stock'],
             (float) $fila['costo'],
-            (bool) $fila['activo']
+            (bool) $fila['activo'],
+            ($fila['estado'] ?? '') === 'YA_PEDIDO'
         );
     }
 
-    // El estado no se elige: sale del stock.
+    // El estado sale del stock, salvo que el veterinario lo haya marcado "Ya pedido":
+    // así se ve que el faltante ya está resuelto y no se vuelve a pedir.
     public function estado(): string
     {
+        if ($this->pedido) {
+            return 'YA_PEDIDO';
+        }
+
         return $this->stock === 0 ? 'EN_FALTA' : 'DISPONIBLE';
+    }
+
+    // Marca el insumo como pedido al proveedor. Solo tiene sentido con stock bajo (10 o menos):
+    // devuelve false si el insumo tiene stock suficiente.
+    public function marcarPedido(): bool
+    {
+        if (!$this->stockBajo()) {
+            return false;
+        }
+
+        $this->pedido = true;
+        return true;
     }
 
     // UML: stockBajo(). 10 o menos (un insumo en falta también tiene stock bajo).
@@ -46,6 +66,8 @@ class Insumo
     public function reponer(int $cantidad): void
     {
         $this->stock += $cantidad;
+        // Llegó el pedido: deja de estar "Ya pedido" y el estado vuelve a salir del stock.
+        $this->pedido = false;
     }
 
     // UML: descontarStock(cantidad). Retiro manual.

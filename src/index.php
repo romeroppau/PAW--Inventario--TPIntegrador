@@ -13,6 +13,7 @@ require_once $raiz . '/comun/router.php';
 require_once $raiz . '/comun/logger.php';
 require_once $raiz . '/comun/database.php';
 require_once $raiz . '/comun/auth.php';
+require_once $raiz . '/comun/configuracion.php';   // los plazos de la tienda que configura la veterinaria
 
 // 2. Cargar las clases propias de Inventario con un autoload: cuando el código usa una clase
 //    que PHP todavía no conoce (por ejemplo ProductoControlador), busca src/ProductoControlador.php

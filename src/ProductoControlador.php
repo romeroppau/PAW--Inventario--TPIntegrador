@@ -150,6 +150,26 @@ class ProductoControlador
         http_response_code(204);
     }
 
+    // POST /api/inventario/productos/{id}/reactivar
+    // Deshace la baja: vuelve a la tienda (si no está vencido) con su stock e historial.
+    // Si ya estaba activo no cambia nada.
+    public static function reactivar(array $parametros): void
+    {
+        self::veterinario(true);
+
+        $productos = self::repositorio();
+        $id = self::id($parametros);
+
+        if ($id === null || !$productos->existe($id)) {
+            Response::json(['error' => self::NO_ENCONTRADO], 404);
+            return;
+        }
+
+        $productos->reactivar($id);
+
+        Response::json($productos->buscarPorId($id));
+    }
+
     // POST /api/inventario/productos/{id}/stock
     public static function cargarStock(array $parametros): void
     {

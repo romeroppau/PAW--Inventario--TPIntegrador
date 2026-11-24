@@ -13,6 +13,9 @@ Los productos de la tienda tienen su propio contrato: [contrato.md](contrato.md)
 | `POST /api/inventario/insumos` | Veterinario | Crear un insumo |
 | `PUT /api/inventario/insumos/{id}` | Veterinario | Editar un insumo (no cambia el stock) |
 | `DELETE /api/inventario/insumos/{id}` | Veterinario | Dar de baja un insumo (baja lógica) |
+| `POST /api/inventario/insumos/{id}/reactivar` | Veterinario | Deshacer la baja |
+| `POST /api/inventario/insumos/{id}/pedido` | Veterinario | Marcar "Ya pedido" al proveedor (solo con stock bajo) |
+| `DELETE /api/inventario/insumos/{id}/pedido` | Veterinario | Desmarcar "Ya pedido" |
 | `POST /api/inventario/insumos/{id}/stock` | Veterinario | Cargar stock. Registra un movimiento de entrada |
 | `POST /api/inventario/insumos/{id}/retiro` | Veterinario | Retirar unidades sin una consulta. Registra un movimiento de salida |
 | `GET /api/inventario/insumos/movimientos` | Veterinario | Movimientos de todos los insumos, con filtro opcional por insumo |
@@ -38,7 +41,7 @@ Los insumos **no** tienen rutas en `/api/tienda/`: el cliente nunca los ve.
 | `nombre` | texto | Nombre del insumo |
 | `stock` | número | Unidades disponibles |
 | `costo` | número | Lo que le cuesta a la veterinaria, en pesos, con hasta 2 decimales. Puede ser 0 (por ejemplo, un insumo donado) |
-| `estado` | texto | `DISPONIBLE` o `EN_FALTA`. Se calcula solo (ver abajo) |
+| `estado` | texto | `DISPONIBLE`, `EN_FALTA` o `YA_PEDIDO` (ver abajo) |
 | `stock_bajo` | booleano | `true` si el stock es 10 o menos |
 | `activo` | booleano | `false` si fue dado de baja |
 
@@ -48,11 +51,13 @@ Los valores de `estado` son códigos. El texto que ve el usuario lo arma el fron
 |---|---|
 | `DISPONIBLE` | Disponible |
 | `EN_FALTA` | En falta |
+| `YA_PEDIDO` | Ya pedido |
 
 ### Estado y stock bajo
 
 - **El estado no se elige: se calcula según el stock.** Si el stock es 0, el insumo queda `EN_FALTA`; si es mayor que 0, queda `DISPONIBLE`. Se actualiza cada vez que cambia el stock: en el alta, en la carga de stock, en el retiro manual y cuando una consulta descuenta insumos.
-- El frontend nunca manda `estado`: si el pedido lo trae, se ignora.
+- **Ya pedido:** con stock bajo, el veterinario puede marcar que ya lo pidió al proveedor (`POST .../pedido`). Queda `YA_PEDIDO` aunque se sigan descontando unidades, para que se vea que el faltante está resuelto y no se pida dos veces. Al cargar stock (llegó el pedido) vuelve a calcularse según el stock.
+- El frontend nunca manda `estado` en el alta ni en la edición: si el pedido lo trae, se ignora.
 - **Stock bajo:** un insumo con 10 unidades o menos tiene `stock_bajo: true`. La regla está en el módulo (`Insumo::stockBajo()`), así el frontend no la repite: solo lo destaca en el listado. Un insumo en falta (stock 0) también tiene `stock_bajo: true`.
 
 ### Validación de campos
@@ -175,6 +180,34 @@ Baja lógica: el insumo queda con `activo: false` y se conserva su historial (la
 **204 No Content**, sin cuerpo. Dar de baja un insumo que ya estaba dado de baja también responde `204`.
 
 **Errores:** `404` si no existe.
+
+---
+
+## POST /api/inventario/insumos/{id}/reactivar
+
+Deshace la baja: el insumo vuelve con `activo: true`, con el stock y el historial que tenía. Reactivar un insumo activo no cambia nada.
+
+**200 OK** con el insumo completo (como en `GET /api/inventario/insumos/{id}`). **Errores:** `404` si no existe.
+
+---
+
+## POST /api/inventario/insumos/{id}/pedido · DELETE /api/inventario/insumos/{id}/pedido
+
+`POST` marca el insumo como pedido al proveedor (`estado: "YA_PEDIDO"`); `DELETE` lo desmarca (por si se marcó por error) y el estado vuelve a salir del stock. Repetir cualquiera de los dos no cambia nada. Sin cuerpo.
+
+**200 OK**, igual que la carga de stock:
+
+```json
+{ "id": 108, "stock": 3, "estado": "YA_PEDIDO", "stock_bajo": true }
+```
+
+**Errores:**
+
+| Código | Cuerpo | Cuándo |
+|---|---|---|
+| `404` | `{ "error": "Insumo no encontrado" }` | No existe |
+| `409` | `{ "error": "El insumo está dado de baja" }` | Está dado de baja |
+| `409` | `{ "error": "Solo se marca como pedido un insumo con stock bajo (10 o menos)" }` | `POST` con más de 10 unidades |
 
 ---
 
@@ -307,4 +340,4 @@ Historial de movimientos de un insumo, del más reciente al más antiguo.
 ## Para los otros módulos
 
 - **Pacientes (consultas):** lee `nombre`, `costo`, `stock`, `estado` y `activo` directo de la tabla `insumo`, con su usuario de MySQL `pacientes` (solo lectura). No usa estos endpoints.
-- **Descuento de stock:** cuando se finaliza una consulta, el stock de los insumos lo descuenta Inventario en `POST /internal/stock/descontar` (contrato interno, rol 1). Ese descuento también actualiza el estado: si el stock llega a 0, el insumo queda `EN_FALTA`.
+- **Descuento de stock:** cuando se finaliza una consulta, el stock de los insumos lo descuenta Inventario en `POST /internal/stock/descontar` (contrato interno, rol 1). Ese descuento también actualiza el estado: si el stock llega a 0, el insumo queda `EN_FALTA` (salvo que esté `YA_PEDIDO`, que se conserva).

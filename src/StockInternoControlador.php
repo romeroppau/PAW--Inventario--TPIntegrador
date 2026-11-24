@@ -54,6 +54,13 @@ class StockInternoControlador
                         'items' => $resultado['items'],
                     ], 409);
                     return;
+                case 'OPERACION_DISTINTA':
+                    Response::json([
+                        'error' => 'La operación ya se aplicó con otros datos',
+                        'motivo' => 'OPERACION_DISTINTA',
+                        'items' => $resultado['items'],
+                    ], 409);
+                    return;
                 case 'ITEM_INEXISTENTE':
                     Response::json([
                         'error' => 'Ítem no encontrado',

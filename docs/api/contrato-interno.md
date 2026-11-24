@@ -33,7 +33,9 @@ Los tipos tienen que ser los correctos: un número como texto (`"2"`) o un decim
 
 **Qué hace:** todo o nada, en una sola transacción.
 - Resta el stock de cada ítem y registra un movimiento `SALIDA` con motivo `CONSULTA` por ítem. Los movimientos de insumo llevan solo `insumo_id`; los de producto, solo `producto_id`.
-- En los insumos también actualiza el estado: si el stock llega a 0, queda `EN_FALTA`; si no, `DISPONIBLE`.
+- En los insumos también actualiza el estado: si el stock llega a 0, queda `EN_FALTA`; si no, `DISPONIBLE`. Un insumo marcado `YA_PEDIDO` queda así hasta que se le carga stock.
+- La fecha de los movimientos es la hora de Argentina, igual que en las cargas y retiros del veterinario (MySQL trabaja en UTC).
+- Antes de registrar nada comprueba que cada ítem exista: si alguno no existe, responde `404` y no descuenta nada.
 - No descuenta ítems dados de baja: si alguno se dio de baja después de cargarse en la consulta, responde `409` y no descuenta nada. Un ítem que ya se había descontado antes de la baja se saltea, como cualquier ítem ya aplicado.
 
 **Respuestas:**
@@ -47,6 +49,7 @@ Los tipos tienen que ser los correctos: un número como texto (`"2"`) o un decim
 | `404` | `{ "error": "Ítem no encontrado", "items": [ { "tipo": "INSUMO", "id": 3 } ] }` | El producto o insumo no existe. No descuenta nada |
 | `409` | `{ "error": "Stock insuficiente", "items": [ { "tipo": "INSUMO", "id": 3, "stock": 0 } ] }` | Algún ítem no alcanza. No descuenta nada. Lista todos los faltantes |
 | `409` | `{ "error": "Ítem dado de baja", "motivo": "DADO_DE_BAJA", "items": [ { "tipo": "INSUMO", "id": 3 } ] }` | Algún ítem está dado de baja. No descuenta nada. Lista todos los dados de baja |
+| `409` | `{ "error": "La operación ya se aplicó con otros datos", "motivo": "OPERACION_DISTINTA", "items": [ { "tipo": "INSUMO", "id": 3, "cantidad_aplicada": 2 } ] }` | Un `id_operacion` ya aplicado vuelve con otra cantidad u otro ítem (ver Reintentos). No descuenta nada |
 | `500` | `{ "error": "No se pudo procesar el descuento de stock" }` | Error inesperado, sin detalles internos |
 
 ## Reintentos
@@ -58,5 +61,6 @@ La idempotencia es **por ítem**, no por pedido. `id_operacion` identifica a cad
 - Si el pedido trae ítems ya aplicados y otros nuevos, se saltean los viejos y se descuentan solo los nuevos (`aplicado: true`).
 - Si todos ya estaban aplicados, no se descuenta nada (`aplicado: false`).
 - Si un ítem nuevo no tiene stock, responde `409` y **no se descuenta ninguno de los nuevos**. Los que ya estaban aplicados de antes no se tocan.
+- Si un `id_operacion` ya aplicado vuelve **con otra cantidad** (por ejemplo, el primer intento descontó 2, se perdió la respuesta y en la consulta se cambió a 5) o con otro ítem, no se puede saltear (faltarían unidades) ni volver a descontar (sobrarían): responde `409` con `motivo: "OPERACION_DISTINTA"` y la `cantidad_aplicada`, y no descuenta nada. Pacientes se lo explica al veterinario.
 
 Para que esto funcione, Pacientes tiene que armar el `id_operacion` **estable por ítem** (a partir de la consulta y el ítem, no de un contador ni de la hora). Así un reintento, o un reintento con ítems agregados, no descuenta dos veces lo mismo.

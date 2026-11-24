@@ -15,6 +15,9 @@ $router->get('/api/inventario/insumos/movimientos', [InsumoControlador::class, '
 $router->get('/api/inventario/insumos/{id}', [InsumoControlador::class, 'detalle']);
 $router->put('/api/inventario/insumos/{id}', [InsumoControlador::class, 'editar']);
 $router->delete('/api/inventario/insumos/{id}', [InsumoControlador::class, 'darDeBaja']);
+$router->post('/api/inventario/insumos/{id}/reactivar', [InsumoControlador::class, 'reactivar']);
+$router->post('/api/inventario/insumos/{id}/pedido', [InsumoControlador::class, 'marcarPedido']);
+$router->delete('/api/inventario/insumos/{id}/pedido', [InsumoControlador::class, 'desmarcarPedido']);
 $router->post('/api/inventario/insumos/{id}/stock', [InsumoControlador::class, 'cargarStock']);
 $router->post('/api/inventario/insumos/{id}/retiro', [InsumoControlador::class, 'retirar']);
 $router->get('/api/inventario/insumos/{id}/movimientos', [InsumoControlador::class, 'movimientos']);
