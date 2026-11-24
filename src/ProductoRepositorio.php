@@ -255,15 +255,36 @@ class ProductoRepositorio
     // Historial de movimientos de un producto, del más reciente al más antiguo, con el nombre de quien lo registró.
     public function movimientos(int $productoId): array
     {
-        $consulta = $this->db->prepare(
-            "SELECT m.id, DATE_FORMAT(m.fecha, '%Y-%m-%d %H:%i:%s') AS fecha, m.tipo, m.motivo, m.cantidad,
-                    u.nombre AS usuario
-             FROM movimiento_inventario m
-             LEFT JOIN usuario u ON u.id = m.usuario_id
-             WHERE m.producto_id = ?
-             ORDER BY m.fecha DESC, m.id DESC"
-        );
-        $consulta->execute([$productoId]);
+        return $this->todosLosMovimientos($productoId);
+    }
+
+    // Los movimientos de los productos (o de uno), del más reciente al más antiguo. $desde y $hasta
+    // (AAAA-MM-DD, inclusive) filtran por el día. Cada uno trae el producto y de dónde salió
+    // (consulta_id o compra, ReferenciaMovimiento).
+    public function todosLosMovimientos(?int $productoId = null, ?string $desde = null, ?string $hasta = null): array
+    {
+        $sql = "SELECT m.id, DATE_FORMAT(m.fecha, '%Y-%m-%d %H:%i:%s') AS fecha, m.tipo, m.motivo, m.cantidad,
+                       m.producto_id, p.nombre AS producto, u.nombre AS usuario, m.id_operacion
+                FROM movimiento_inventario m
+                JOIN producto p ON p.id = m.producto_id
+                LEFT JOIN usuario u ON u.id = m.usuario_id
+                WHERE 1 = 1";
+        $parametros = [];
+        if ($productoId !== null) {
+            $sql .= ' AND m.producto_id = ?';
+            $parametros[] = $productoId;
+        }
+        if ($desde !== null) {
+            $sql .= ' AND m.fecha >= ?';
+            $parametros[] = $desde . ' 00:00:00';
+        }
+        if ($hasta !== null) {
+            $sql .= ' AND m.fecha < ? + INTERVAL 1 DAY';
+            $parametros[] = $hasta;
+        }
+
+        $consulta = $this->db->prepare($sql . ' ORDER BY m.fecha DESC, m.id DESC');
+        $consulta->execute($parametros);
 
         return array_map(fn (array $fila) => [
             'id' => (int) $fila['id'],
@@ -271,8 +292,10 @@ class ProductoRepositorio
             'tipo' => $fila['tipo'],
             'motivo' => $fila['motivo'],
             'cantidad' => (int) $fila['cantidad'],
+            'producto_id' => (int) $fila['producto_id'],
+            'producto' => $fila['producto'],
             'usuario' => $fila['usuario'],
-        ], $consulta->fetchAll());
+        ] + ReferenciaMovimiento::de($fila['id_operacion']), $consulta->fetchAll());
     }
 
     // Movimiento de entrada por una carga del veterinario. Se llama siempre dentro de una transacción.

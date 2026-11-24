@@ -6,8 +6,17 @@
 // Contrato: docs/api/contrato-insumos.md.
 class Insumo
 {
-    // Con esta cantidad o menos, el insumo tiene stock bajo (regla de reposición del plan).
+    // Con esta cantidad o menos, el insumo tiene stock bajo (regla de reposición del plan). Es el valor
+    // por defecto: la veterinaria lo cambia en Configuración (limite_stock_bajo, Entrega 5).
     public const LIMITE_STOCK_BAJO = 10;
+
+    // El límite de stock bajo configurado (el mismo para insumos y productos), o 10 si no hay.
+    public static function limiteStockBajo(): int
+    {
+        return class_exists('Configuracion')
+            ? Configuracion::entero('limite_stock_bajo', self::LIMITE_STOCK_BAJO, 0, 1000)
+            : self::LIMITE_STOCK_BAJO;
+    }
 
     public function __construct(
         public int $id,
@@ -44,7 +53,7 @@ class Insumo
         return $this->stock === 0 ? 'EN_FALTA' : 'DISPONIBLE';
     }
 
-    // Marca el insumo como pedido al proveedor. Solo tiene sentido con stock bajo (10 o menos):
+    // Marca el insumo como pedido al proveedor. Solo tiene sentido con stock bajo (el límite configurado):
     // devuelve false si el insumo tiene stock suficiente.
     public function marcarPedido(): bool
     {
@@ -56,10 +65,10 @@ class Insumo
         return true;
     }
 
-    // UML: stockBajo(). 10 o menos (un insumo en falta también tiene stock bajo).
+    // UML: stockBajo(). El límite configurado o menos (un insumo en falta también tiene stock bajo).
     public function stockBajo(): bool
     {
-        return $this->stock <= self::LIMITE_STOCK_BAJO;
+        return $this->stock <= self::limiteStockBajo();
     }
 
     // UML: reponer(cantidad). Carga de stock.
