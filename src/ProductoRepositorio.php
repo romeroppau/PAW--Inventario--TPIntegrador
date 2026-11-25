@@ -252,6 +252,40 @@ class ProductoRepositorio
         return $stock;
     }
 
+    // Resta stock a mano (un producto vencido, roto o que se usó en el local) y registra la SALIDA
+    // con motivo AJUSTE ("Retiro manual" en la pantalla), en una transacción.
+    // El UPDATE resta sobre el valor de la base y solo si alcanza (stock >= ?): dos retiros al mismo
+    // tiempo no dejan el stock negativo. Devuelve el stock nuevo, o null si el producto no existe,
+    // está dado de baja o no tiene tantas unidades (el controlador averigua cuál de las tres).
+    public function retirarStock(int $id, int $cantidad, int $usuarioId): ?int
+    {
+        $this->db->beginTransaction();
+        try {
+            $consulta = $this->db->prepare(
+                'UPDATE producto SET stock = stock - ? WHERE id = ? AND activo = 1 AND stock >= ?'
+            );
+            $consulta->execute([$cantidad, $id, $cantidad]);
+
+            if ($consulta->rowCount() === 0) {
+                $this->db->rollBack();
+                return null;
+            }
+
+            $this->registrarMovimiento($id, 'SALIDA', 'AJUSTE', $cantidad, $usuarioId);
+
+            $consulta = $this->db->prepare('SELECT stock FROM producto WHERE id = ?');
+            $consulta->execute([$id]);
+            $stock = (int) $consulta->fetchColumn();
+
+            $this->db->commit();
+        } catch (Throwable $error) {
+            $this->db->rollBack();
+            throw $error;
+        }
+
+        return $stock;
+    }
+
     // Historial de movimientos de un producto, del más reciente al más antiguo, con el nombre de quien lo registró.
     public function movimientos(int $productoId): array
     {
@@ -301,11 +335,16 @@ class ProductoRepositorio
     // Movimiento de entrada por una carga del veterinario. Se llama siempre dentro de una transacción.
     private function registrarEntrada(int $productoId, int $cantidad, int $usuarioId): void
     {
+        $this->registrarMovimiento($productoId, 'ENTRADA', 'CARGA_VETERINARIO', $cantidad, $usuarioId);
+    }
+
+    private function registrarMovimiento(int $productoId, string $tipo, string $motivo, int $cantidad, int $usuarioId): void
+    {
         $consulta = $this->db->prepare(
-            "INSERT INTO movimiento_inventario (producto_id, tipo, cantidad, motivo, usuario_id)
-             VALUES (?, 'ENTRADA', ?, 'CARGA_VETERINARIO', ?)"
+            'INSERT INTO movimiento_inventario (producto_id, tipo, cantidad, motivo, usuario_id)
+             VALUES (?, ?, ?, ?, ?)'
         );
-        $consulta->execute([$productoId, $cantidad, $usuarioId]);
+        $consulta->execute([$productoId, $tipo, $cantidad, $motivo, $usuarioId]);
     }
 
     // Pasa una fila de MySQL al formato del contrato: números como números, booleanos como booleanos,

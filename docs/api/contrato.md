@@ -17,6 +17,7 @@ Las reglas generales que valen para todos los módulos (formato JSON, formato de
 | `DELETE /api/inventario/productos/{id}` | Veterinario | Dar de baja un producto (baja lógica) |
 | `POST /api/inventario/productos/{id}/reactivar` | Veterinario | Deshacer la baja |
 | `POST /api/inventario/productos/{id}/stock` | Veterinario | Cargar stock. Registra un movimiento de entrada |
+| `POST /api/inventario/productos/{id}/retiro` | Veterinario | Retirar stock a mano. Registra una salida por ajuste |
 | `GET /api/inventario/productos/{id}/movimientos` | Veterinario | Historial de movimientos de un producto |
 | `GET /api/inventario/productos/movimientos` | Veterinario | Movimientos de todos los productos, con filtros (Entrega 5) |
 | `GET /api/inventario/salud` | Público | Indica si el módulo funciona y llega a la base |
@@ -326,6 +327,31 @@ Suma unidades al stock y registra un movimiento `ENTRADA` con motivo `CARGA_VETE
 
 - `404`, si el producto no existe.
 - `409`, si el producto está dado de baja: `{ "error": "El producto está dado de baja" }`.
+
+---
+
+## POST /api/inventario/productos/{id}/retiro
+
+Resta unidades del stock a mano (un producto vencido, roto o usado en el local), como el retiro de insumos. Registra un movimiento `SALIDA` con motivo `AJUSTE` ("Retiro manual" en la pantalla), a nombre del veterinario de la sesión. El stock y el movimiento se guardan juntos, y el stock nunca queda negativo, aunque lleguen dos retiros al mismo tiempo.
+
+**Pedido:**
+
+```json
+{ "cantidad": 3 }
+```
+
+**200 OK:**
+
+```json
+{ "id": 7, "stock": 21 }
+```
+
+**Errores:**
+
+- `400`, si la cantidad no es un entero entre 1 y 100.000 (el mismo cuerpo que en la carga).
+- `404`, si el producto no existe.
+- `409`, si el producto está dado de baja: `{ "error": "El producto está dado de baja" }`.
+- `409`, si no hay tantas unidades: `{ "error": "Stock insuficiente", "stock": 2 }`.
 
 ---
 

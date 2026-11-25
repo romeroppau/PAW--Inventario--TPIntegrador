@@ -268,7 +268,7 @@ class Compra
             . 'Como te avisamos, el importe no se reintegra. Si tenés alguna duda, escribinos. 🐾',
             self::primerNombre($nombre),
             $numero,
-            $retirarHasta->format('d/m')
+            $retirarHasta->format('d/m/Y')
         );
     }
 
@@ -335,9 +335,9 @@ class Compra
         return number_format($valor, 2, ',', '.');
     }
 
-    // "martes 25/11"
+    // "martes 25/11/2026"
     public static function diaConNombre(DateTimeImmutable $dia): string
     {
-        return self::DIAS_DE_LA_SEMANA[(int) $dia->format('w')] . ' ' . $dia->format('d/m');
+        return self::DIAS_DE_LA_SEMANA[(int) $dia->format('w')] . ' ' . $dia->format('d/m/Y');
     }
 }
