@@ -82,4 +82,23 @@ class InsumoValidadorTest extends TestCase
         $this->assertNull(InsumoValidador::cantidad('10'));
         $this->assertNull(InsumoValidador::cantidad(null));
     }
+
+    // Migración 025: la aplicación del calendario es opcional; vacía = no es una vacuna.
+    public function testLaAplicacionDelCalendarioEsOpcionalYDeLaLista(): void
+    {
+        $base = ['nombre' => 'Vacuna antirrábica', 'costo' => 4300, 'stock' => 0];
+
+        [$limpios] = InsumoValidador::alta($base + ['aplicacion' => 'ANTIRRABICA']);
+        $this->assertSame('ANTIRRABICA', $limpios['aplicacion']);
+
+        [$limpios] = InsumoValidador::alta($base + ['aplicacion' => '']);
+        $this->assertNull($limpios['aplicacion']);
+
+        [, $errores] = InsumoValidador::alta($base + ['aplicacion' => 'PELUQUERIA']);
+        $this->assertSame('Elegí una vacuna o antiparasitario de la lista', $errores['aplicacion']);
+
+        // En la edición, si no viene no se toca.
+        [$limpios] = InsumoValidador::edicion(['nombre' => 'Gasa', 'costo' => 200]);
+        $this->assertArrayNotHasKey('aplicacion', $limpios);
+    }
 }
