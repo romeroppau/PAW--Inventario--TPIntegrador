@@ -12,6 +12,9 @@ $router->get('/api/tienda/productos/{id}', [ProductoControlador::class, 'detalle
 // Panel del veterinario.
 $router->get('/api/inventario/productos', [ProductoControlador::class, 'listado']);
 $router->post('/api/inventario/productos', [ProductoControlador::class, 'crear']);
+// Va ANTES de las rutas con {id}: el router prueba las rutas en orden, y si /{id} estuviera
+// primero, tomaría la palabra "movimientos" como si fuera un id (y respondería 404).
+$router->get('/api/inventario/productos/movimientos', [ProductoControlador::class, 'todosLosMovimientos']);
 $router->get('/api/inventario/productos/{id}', [ProductoControlador::class, 'detalle']);
 $router->put('/api/inventario/productos/{id}', [ProductoControlador::class, 'editar']);
 $router->delete('/api/inventario/productos/{id}', [ProductoControlador::class, 'darDeBaja']);

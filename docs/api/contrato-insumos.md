@@ -42,7 +42,7 @@ Los insumos **no** tienen rutas en `/api/tienda/`: el cliente nunca los ve.
 | `stock` | número | Unidades disponibles |
 | `costo` | número | Lo que le cuesta a la veterinaria, en pesos, con hasta 2 decimales. Puede ser 0 (por ejemplo, un insumo donado) |
 | `estado` | texto | `DISPONIBLE`, `EN_FALTA` o `YA_PEDIDO` (ver abajo) |
-| `stock_bajo` | booleano | `true` si el stock es 10 o menos |
+| `stock_bajo` | booleano | `true` si el stock es el límite configurado o menos (10 si no se cambió) |
 | `activo` | booleano | `false` si fue dado de baja |
 
 Los valores de `estado` son códigos. El texto que ve el usuario lo arma el frontend:
@@ -58,7 +58,7 @@ Los valores de `estado` son códigos. El texto que ve el usuario lo arma el fron
 - **El estado no se elige: se calcula según el stock.** Si el stock es 0, el insumo queda `EN_FALTA`; si es mayor que 0, queda `DISPONIBLE`. Se actualiza cada vez que cambia el stock: en el alta, en la carga de stock, en el retiro manual y cuando una consulta descuenta insumos.
 - **Ya pedido:** con stock bajo, el veterinario puede marcar que ya lo pidió al proveedor (`POST .../pedido`). Queda `YA_PEDIDO` aunque se sigan descontando unidades, para que se vea que el faltante está resuelto y no se pida dos veces. Al cargar stock (llegó el pedido) vuelve a calcularse según el stock.
 - El frontend nunca manda `estado` en el alta ni en la edición: si el pedido lo trae, se ignora.
-- **Stock bajo:** un insumo con 10 unidades o menos tiene `stock_bajo: true`. La regla está en el módulo (`Insumo::stockBajo()`), así el frontend no la repite: solo lo destaca en el listado. Un insumo en falta (stock 0) también tiene `stock_bajo: true`.
+- **Stock bajo:** un insumo con 10 unidades o menos tiene `stock_bajo: true`. (Entrega 5) El 10 es el valor por defecto: la veterinaria lo cambia en Configuración (`limite_stock_bajo`, el mismo que usan los reportes y los productos). La regla está en el módulo (`Insumo::stockBajo()`), así el frontend no la repite: solo lo destaca en el listado. Un insumo en falta (stock 0) también tiene `stock_bajo: true`.
 
 ### Validación de campos
 
@@ -117,9 +117,12 @@ Listado para el panel del veterinario: **todos** los insumos, incluidos los dado
       "stock_bajo": true,
       "activo": true
     }
-  ]
+  ],
+  "limite_stock_bajo": 10
 }
 ```
+
+`limite_stock_bajo` (Entrega 5): el límite configurado, para el filtro "solo stock bajo" del listado.
 
 ---
 
@@ -207,7 +210,7 @@ Deshace la baja: el insumo vuelve con `activo: true`, con el stock y el historia
 |---|---|---|
 | `404` | `{ "error": "Insumo no encontrado" }` | No existe |
 | `409` | `{ "error": "El insumo está dado de baja" }` | Está dado de baja |
-| `409` | `{ "error": "Solo se marca como pedido un insumo con stock bajo (10 o menos)" }` | `POST` con más de 10 unidades |
+| `409` | `{ "error": "Solo se marca como pedido un insumo con stock bajo (10 o menos)" }` | `POST` con más unidades que el límite (el número del mensaje es el límite configurado) |
 
 ---
 
@@ -281,10 +284,15 @@ Movimientos de **todos** los insumos, del más reciente al más antiguo. Lo usa 
 | Parámetro | Descripción |
 |---|---|
 | `insumo` | Id de un insumo: solo trae sus movimientos. Si no es un id válido, se ignora y se traen todos. Si el insumo no existe o no tiene movimientos, `datos` llega vacío |
+| `desde`, `hasta` | (Entrega 5) Fechas `AAAA-MM-DD`, inclusive: solo los movimientos de esos días |
 
-**Ejemplos:** `GET /api/inventario/insumos/movimientos` · `GET /api/inventario/insumos/movimientos?insumo=101`
+**Ejemplos:** `GET /api/inventario/insumos/movimientos` · `GET /api/inventario/insumos/movimientos?insumo=101&desde=2026-11-01&hasta=2026-11-30`
 
-**200 OK:** el mismo formato que `GET /api/inventario/insumos/{id}/movimientos` (abajo).
+**200 OK:** el mismo formato que `GET /api/inventario/insumos/{id}/movimientos` (abajo), y además en cada movimiento:
+
+- `consulta_id` y `compra` (Entrega 5): de dónde salió el movimiento, para enlazarlo. `consulta_id` es la consulta en la que se usó (motivo `CONSULTA`); `compra`, el número de la compra de la tienda (`V-000123`, motivos `VENTA` y `VENTA_CANCELADA`). Si no corresponde, `null`. Salen del `id_operacion` del movimiento (`src/ReferenciaMovimiento.php`).
+
+**Errores:** `400 { "error": "Datos inválidos", "campos": { "desde": "..." } }` si una fecha no tiene el formato `AAAA-MM-DD` o `desde` es posterior a `hasta`.
 
 ---
 

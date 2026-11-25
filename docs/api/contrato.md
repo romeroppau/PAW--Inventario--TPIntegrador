@@ -18,6 +18,7 @@ Las reglas generales que valen para todos los módulos (formato JSON, formato de
 | `POST /api/inventario/productos/{id}/reactivar` | Veterinario | Deshacer la baja |
 | `POST /api/inventario/productos/{id}/stock` | Veterinario | Cargar stock. Registra un movimiento de entrada |
 | `GET /api/inventario/productos/{id}/movimientos` | Veterinario | Historial de movimientos de un producto |
+| `GET /api/inventario/productos/movimientos` | Veterinario | Movimientos de todos los productos, con filtros (Entrega 5) |
 | `GET /api/inventario/salud` | Público | Indica si el módulo funciona y llega a la base |
 
 Los insumos internos no forman parte de esta entrega: se usan al registrar consultas, que todavía no existen (módulo Pacientes).
@@ -199,9 +200,12 @@ Listado para el panel del veterinario: **todos** los productos, incluidos los da
       "vencimiento": null,
       "activo": true
     }
-  ]
+  ],
+  "limite_stock_bajo": 10
 }
 ```
+
+`limite_stock_bajo` (Entrega 5): el límite de stock bajo configurado (Configuración, 10 por defecto), para el filtro "solo stock bajo" del listado.
 
 ---
 
@@ -348,8 +352,22 @@ Historial de movimientos de un producto, del más reciente al más antiguo.
 
 - `tipo`: `ENTRADA`, `SALIDA` o `AJUSTE`. En esta entrega solo se generan entradas; las salidas llegan con las ventas y las consultas.
 - `usuario`: nombre de quien registró el movimiento, o `null` si no lo registró una persona.
+- (Entrega 5) Además trae `producto_id`, `producto`, `consulta_id` y `compra`, como el listado de abajo.
 
 **Errores:** `404` si el producto no existe.
+
+## GET /api/inventario/productos/movimientos
+
+(Entrega 5) Movimientos de **todos** los productos, del más reciente al más antiguo: la pantalla "Productos → Movimientos" de la veterinaria.
+
+**Parámetros (opcionales):** `producto` (id de un producto: solo los suyos; si no es un id válido se ignora), `desde` y `hasta` (`AAAA-MM-DD`, inclusive).
+
+**200 OK:** `{ "datos": [ ... ] }`, cada uno con el formato de arriba más:
+
+- `producto_id` y `producto`: el producto (su nombre).
+- `consulta_id` y `compra` (Entrega 5): de dónde salió el movimiento, para enlazarlo. `consulta_id` es la consulta en la que se usó (motivo `CONSULTA`); `compra`, el número de la compra de la tienda (`V-000123`, motivos `VENTA` y `VENTA_CANCELADA`). Si no corresponde, `null`. Salen del `id_operacion` del movimiento (`src/ReferenciaMovimiento.php`).
+
+**Errores:** `400 { "error": "Datos inválidos", "campos": { "desde": "..." } }` si una fecha no tiene el formato `AAAA-MM-DD` o `desde` es posterior a `hasta`.
 
 ---
 
