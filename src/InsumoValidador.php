@@ -74,6 +74,19 @@ class InsumoValidador
             }
         }
 
+        // aplicacion (migración 025): opcional. null o "" = no es del calendario. Si no viene en la
+        // edición, no se cambia.
+        if (array_key_exists('aplicacion', $datos)) {
+            $aplicacion = $datos['aplicacion'];
+            if ($aplicacion === null || $aplicacion === '') {
+                $limpios['aplicacion'] = null;
+            } elseif (is_string($aplicacion) && in_array($aplicacion, Insumo::APLICACIONES, true)) {
+                $limpios['aplicacion'] = $aplicacion;
+            } else {
+                $errores['aplicacion'] = 'Elegí una vacuna o antiparasitario de la lista';
+            }
+        }
+
         // Cualquier otro campo (id, estado, stock_bajo, activo...) se ignora: no se copia a $limpios.
 
         return [$limpios, $errores];
