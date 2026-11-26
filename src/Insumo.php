@@ -4,6 +4,8 @@
 // Tiene las reglas del insumo y nada de SQL. La usa InsumoRepositorio, que es el que lee
 // y guarda en la base.
 // Contrato: docs/api/contrato-insumos.md.
+// Desde la migración 029 el stock está en lotes (clase Lotes, igual que los productos): stock es la
+// suma de todos y stockSinVencer, lo que se puede usar hoy (sin los lotes vencidos).
 class Insumo
 {
     // Con esta cantidad o menos, el insumo tiene stock bajo (regla de reposición del plan). Es el valor
@@ -31,7 +33,13 @@ class Insumo
         // true si el veterinario lo marcó "Ya pedido" al proveedor. Se borra al cargar stock.
         public bool $pedido = false,
         // La aplicación del calendario (APLICACIONES), o null si no es una vacuna ni un antiparasitario.
-        public ?string $aplicacion = null
+        public ?string $aplicacion = null,
+        // Si tiene vencimiento (029): sus lotes llevan fecha.
+        public bool $vence = true,
+        // Lo que se puede usar hoy (sin los lotes vencidos); null: igual al stock.
+        public ?int $stockSinVencer = null,
+        // El vencimiento del próximo lote con stock que vence, o null.
+        public ?string $vencimiento = null
     ) {
     }
 
@@ -45,7 +53,10 @@ class Insumo
             (float) $fila['costo'],
             (bool) $fila['activo'],
             ($fila['estado'] ?? '') === 'YA_PEDIDO',
-            $fila['aplicacion'] ?? null
+            $fila['aplicacion'] ?? null,
+            (bool) ($fila['vence'] ?? true),
+            isset($fila['stock_sin_vencer']) ? (int) $fila['stock_sin_vencer'] : null,
+            $fila['vencimiento'] ?? null
         );
     }
 
@@ -73,9 +84,16 @@ class Insumo
     }
 
     // UML: stockBajo(). El límite configurado o menos (un insumo en falta también tiene stock bajo).
+    // Cuenta lo que se puede usar: sin los lotes vencidos.
     public function stockBajo(): bool
     {
-        return $this->stock <= self::limiteStockBajo();
+        return $this->sinVencer() <= self::limiteStockBajo();
+    }
+
+    // Lo que se puede usar hoy.
+    public function sinVencer(): int
+    {
+        return $this->stockSinVencer ?? $this->stock;
     }
 
     // UML: reponer(cantidad). Carga de stock.
@@ -109,7 +127,10 @@ class Insumo
             'costo' => $this->costo,
             'estado' => $this->estado(),
             'stock_bajo' => $this->stockBajo(),
-            'activo' => $this->activo
+            'activo' => $this->activo,
+            'vence' => $this->vence,
+            'stock_sin_vencer' => $this->sinVencer(),
+            'vencimiento' => $this->vencimiento,
         ];
     }
 }

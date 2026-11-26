@@ -118,46 +118,71 @@ class ProductoRetiroTest extends TestCase
         $this->assertSame('lote_inexistente', $this->repo->retirarStock($producto, 1, $this->usuarioId, 999999999));
     }
 
-    // Cargar stock: en un lote que ya existe, en uno nuevo o (sin elegir) en el que no vence.
+    // Cargar stock: en un lote que ya existe o en uno nuevo, que lleva el número que sigue (029).
     public function testCargarEnUnLoteNuevoYEnUnoQueYaExiste(): void
     {
         $producto = $this->crearProducto(5, true, '2099-01-01');
 
         $r = $this->repo->cargarStock($producto, 4, $this->usuarioId, null, ['codigo' => 'L-77', 'vencimiento' => '2099-06-30']);
         $this->assertSame(9, $r['stock']);
-        $this->assertSame(['codigo' => 'L-77', 'vencimiento' => '2099-06-30', 'stock' => 4],
-            ['codigo' => $r['lote']['codigo'], 'vencimiento' => $r['lote']['vencimiento'], 'stock' => $r['lote']['stock']]);
+        $this->assertSame(['numero' => 2, 'nombre' => 'L2 (L-77)', 'codigo' => 'L-77', 'vencimiento' => '2099-06-30', 'stock' => 4],
+            array_intersect_key($r['lote'], array_flip(['numero', 'nombre', 'codigo', 'vencimiento', 'stock'])));
 
         $r = $this->repo->cargarStock($producto, 1, $this->usuarioId, $r['lote']['id']);
         $this->assertSame([10, 5], [$r['stock'], $r['lote']['stock']]);
 
-        $r = $this->repo->cargarStock($producto, 2, $this->usuarioId);
-        $this->assertSame([12, null], [$r['stock'], $r['lote']['vencimiento']]);
+        $r = $this->repo->cargarStock($producto, 2, $this->usuarioId, null, ['codigo' => null, 'vencimiento' => '2099-03-01']);
+        $this->assertSame([12, 3, 'L3'], [$r['stock'], $r['lote']['numero'], $r['lote']['nombre']]);
 
         // El producto vence cuando vence su primer lote con stock, y los movimientos dicen el lote
-        // (L-77 y el que no vence; el primero lo creó la prueba, sin movimiento).
+        // (L2 y L3; el primero lo creó la prueba, sin movimiento).
         $this->assertSame('2099-01-01', $this->db->query("SELECT fecha_vencimiento FROM producto WHERE id = $producto")->fetchColumn());
         $this->assertSame(2, (int) $this->db->query("SELECT COUNT(DISTINCT lote_id) FROM movimiento_inventario WHERE producto_id = $producto")->fetchColumn());
     }
 
-    // El producto con su stock en un lote (con ese vencimiento).
-    private function crearProducto(int $stock, bool $activo = true, ?string $vencimiento = null): int
+    // "vence" (029): un producto que vence no carga sin lote ni en un lote sin vencimiento; uno que
+    // no vence carga sin elegir en su lote sin vencimiento y no en uno que vence. Un lote vencido no
+    // recibe stock.
+    public function testLaCargaSigueLaReglaDeVence(): void
     {
-        $this->db->prepare("INSERT INTO producto (nombre, precio, stock, categoria, especie_destino, etapa_vida, activo)
-                            VALUES ('Producto de prueba retiro', 1000, ?, 'MEDICAMENTO', 'TODAS', 'TODAS', ?)")
-            ->execute([$stock, $activo ? 1 : 0]);
+        $vence = $this->crearProducto(5, true, '2099-01-01');
+        $sinFecha = $this->agregarLote($vence, 0, null);
+        $this->assertSame('falta_lote', $this->repo->cargarStock($vence, 1, $this->usuarioId));
+        $this->assertSame('lote_no_corresponde', $this->repo->cargarStock($vence, 1, $this->usuarioId, $sinFecha));
+        $viejo = $this->agregarLote($vence, 1, '2020-01-01');
+        $this->assertSame('lote_vencido', $this->repo->cargarStock($vence, 1, $this->usuarioId, $viejo));
+
+        $noVence = $this->crearProducto(3, true, null, false);
+        $r = $this->repo->cargarStock($noVence, 2, $this->usuarioId);
+        $this->assertSame([5, 'L1', null], [$r['stock'], $r['lote']['nombre'], $r['lote']['vencimiento']]);
+        $conFecha = $this->agregarLote($noVence, 0, '2099-01-01');
+        $this->assertSame('lote_no_corresponde', $this->repo->cargarStock($noVence, 1, $this->usuarioId, $conFecha));
+
+        // En el panel no aparecen los lotes vacíos que no siguen la regla (ni los vencidos vacíos).
+        $lotes = $this->repo->buscarPorId($noVence)['lotes'];
+        $this->assertSame([['L1', 5]], array_map(fn ($l) => [$l['nombre'], $l['stock']], $lotes));
+        $this->assertFalse($this->repo->buscarPorId($noVence)['vence']);
+    }
+
+    // El producto con su stock en un lote (con ese vencimiento).
+    private function crearProducto(int $stock, bool $activo = true, ?string $vencimiento = null, bool $vence = true): int
+    {
+        $this->db->prepare("INSERT INTO producto (nombre, precio, stock, categoria, especie_destino, etapa_vida, activo, vence)
+                            VALUES ('Producto de prueba retiro', 1000, ?, 'MEDICAMENTO', 'TODAS', 'TODAS', ?, ?)")
+            ->execute([$stock, $activo ? 1 : 0, $vence ? 1 : 0]);
         $id = $this->productos[] = (int) $this->db->lastInsertId();
         $this->agregarLote($id, $stock, $vencimiento);
 
         return $id;
     }
 
+    // Un lote nuevo, con el número que sigue del producto (029).
     private function agregarLote(int $producto, int $stock, ?string $vencimiento): int
     {
-        $this->db->prepare('INSERT INTO lote_producto (producto_id, vencimiento, stock, creado_en) VALUES (?, ?, ?, NOW())')
-            ->execute([$producto, $vencimiento, $stock]);
-        $lote = (int) $this->db->lastInsertId();
-        (new Lotes($this->db))->sincronizar($producto);
+        $lotes = new Lotes($this->db);
+        $lote = $lotes->crear($producto, null, $vencimiento);
+        $lotes->sumar($lote, $stock);
+        $lotes->sincronizar($producto);
 
         return $lote;
     }

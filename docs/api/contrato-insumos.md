@@ -16,8 +16,9 @@ Los productos de la tienda tienen su propio contrato: [contrato.md](contrato.md)
 | `POST /api/inventario/insumos/{id}/reactivar` | Veterinario | Deshacer la baja |
 | `POST /api/inventario/insumos/{id}/pedido` | Veterinario | Marcar "Ya pedido" al proveedor (solo con stock bajo) |
 | `DELETE /api/inventario/insumos/{id}/pedido` | Veterinario | Desmarcar "Ya pedido" |
-| `POST /api/inventario/insumos/{id}/stock` | Veterinario | Cargar stock. Registra un movimiento de entrada |
-| `POST /api/inventario/insumos/{id}/retiro` | Veterinario | Retirar unidades sin una consulta. Registra un movimiento de salida |
+| `POST /api/inventario/insumos/{id}/stock` | Veterinario | Cargar stock en un lote (uno que ya existe o uno nuevo). Registra un movimiento de entrada |
+| `POST /api/inventario/insumos/{id}/retiro` | Veterinario | Retirar unidades sin una consulta (de un lote o de los que vencen primero). Registra un movimiento de salida |
+| `PUT /api/inventario/insumos/{id}/lotes/{lote}` | Veterinario | Corregir el número del fabricante o el vencimiento de un lote (26/11) |
 | `GET /api/inventario/insumos/movimientos` | Veterinario | Movimientos de todos los insumos, con filtro opcional por insumo |
 | `GET /api/inventario/insumos/{id}/movimientos` | Veterinario | Historial de movimientos de un insumo |
 
@@ -39,10 +40,14 @@ Los insumos **no** tienen rutas en `/api/tienda/`: el cliente nunca los ve.
 |---|---|---|
 | `id` | número | Identificador |
 | `nombre` | texto | Nombre del insumo |
-| `stock` | número | Unidades disponibles |
+| `stock` | número | Unidades, la suma de sus lotes, vencidos incluidos |
+| `stock_sin_vencer` | número | Las que se pueden usar: sin los lotes vencidos (26/11, migración 029) |
+| `vencimiento` | texto o `null` | Fecha `AAAA-MM-DD` del próximo lote con stock que vence (sin contar los vencidos). `null` si ninguno vence (029) |
+| `vence` | booleano | Si tiene vencimiento: cada lote lleva su fecha (029) |
+| `lotes` | lista | Sus lotes (029): ver [Lotes](#lotes). En el listado, el detalle, el alta, la edición y la corrección de un lote |
 | `costo` | número | Lo que le cuesta a la veterinaria, en pesos, con hasta 2 decimales. Puede ser 0 (por ejemplo, un insumo donado) |
 | `estado` | texto | `DISPONIBLE`, `EN_FALTA` o `YA_PEDIDO` (ver abajo) |
-| `stock_bajo` | booleano | `true` si el stock es el límite configurado o menos (10 si no se cambió) |
+| `stock_bajo` | booleano | `true` si el stock sin vencer es el límite configurado o menos (10 si no se cambió) |
 | `activo` | booleano | `false` si fue dado de baja |
 
 Los valores de `estado` son códigos. El texto que ve el usuario lo arma el frontend:
@@ -52,6 +57,29 @@ Los valores de `estado` son códigos. El texto que ve el usuario lo arma el fron
 | `DISPONIBLE` | Disponible |
 | `EN_FALTA` | En falta |
 | `YA_PEDIDO` | Ya pedido |
+
+### Lotes
+
+Desde la migración 029 (26/11) el stock de un insumo está en **lotes**, igual que el de los productos
+(`contrato.md`, "Lotes"):
+
+```json
+{ "id": 21, "numero": 2, "nombre": "L2 (VS-0911)", "codigo": "VS-0911", "vencimiento": "2027-04-25", "stock": 25, "vencido": false }
+```
+
+- `numero`: los lotes de cada insumo se numeran 1, 2, 3… en el orden en que se crean; en la pantalla,
+  **L1, L2, L3…** (`nombre`, que suma el número del fabricante, `codigo`, si tiene). No se cambia.
+- **`vence`**: si el insumo vence (vacunas, material estéril, líquidos), cada lote nuevo lleva su
+  vencimiento; si no vence (guantes, vendas), ningún lote lo lleva, su stock va a un único lote sin
+  vencimiento y la pantalla no muestra lotes. Se cambia solo con el stock en 0.
+- `lotes` trae los que tienen stock y los vacíos que no vencieron y siguen la regla de `vence`, el que
+  vence primero arriba.
+- **Las consultas usan lo que no está vencido, empezando por el lote que vence primero**, y siguen con
+  el siguiente si no alcanza (`POST /internal/stock/descontar`). Un lote vencido con stock queda para
+  retirarlo, y Reportes lo avisa ("Lotes vencidos").
+- Los movimientos dicen de qué lote fueron (`lote`).
+- La migración dejó a cada insumo que ya existía con un lote L1 con todo su stock, sin vencimiento, y
+  marcó que vencen los que tienen `aplicacion` (vacunas y antiparasitarios).
 
 ### Estado y stock bajo
 
@@ -69,6 +97,9 @@ Se aplica en el alta (`POST`) y en la edición (`PUT`). Antes de validar se quit
 | `nombre` | Texto de 2 a 120 caracteres | "El nombre es obligatorio" | "El nombre debe tener entre 2 y 120 caracteres" |
 | `costo` | Número de 0 a menos de 100.000.000, con hasta 2 decimales | "El costo es obligatorio" | "El costo debe ser un número mayor o igual a 0 con hasta 2 decimales" |
 | `stock` | Solo en el alta. Entero de 0 a 1.000.000 | "El stock es obligatorio" | "El stock debe ser un número entero entre 0 y 1.000.000" |
+| `vence` | `true` o `false` (029). Obligatorio en el alta; en la edición es opcional (si no viene, no cambia) y solo se puede cambiar con el stock en 0 | "Indicá si vence o no" | "Indicá si vence o no" / "Se puede cambiar solo sin stock: retirá o usá las N unidades primero" |
+| `vencimiento` | Solo en el alta: el del primer lote (L1). Fecha `AAAA-MM-DD`, no anterior a hoy. Si `vence` y hay stock inicial, obligatorio; si no vence, tiene que ir vacío | "Este insumo vence: poné la fecha de vencimiento del lote" | "La fecha de vencimiento no es válida" / "La fecha de vencimiento no puede ser anterior a hoy" / "Este insumo no vence: dejá el vencimiento vacío" |
+| `lote` | Solo en el alta: el número de lote del fabricante del primer lote. Opcional, hasta 40 caracteres | — | "El número de lote del fabricante puede tener hasta 40 caracteres" |
 | `aplicacion` | Opcional (migración 025). Qué vacuna o antiparasitario del calendario sanitario es: `SEXTUPLE`, `TRIPLE_FELINA`, `ANTIRRABICA`, `TOS_PERRERAS`, `LEUCEMIA_FELINA` o `ANTIPARASITARIO`. `null` o `""` = no es del calendario. En la edición, si no viene, no se cambia | — | "Elegí una vacuna o antiparasitario de la lista" |
 
 La consulta de una vacuna o desparasitación tiene que llevar un insumo con su `aplicacion` (Pacientes,
@@ -152,9 +183,14 @@ Crea un insumo activo. El estado se calcula a partir del stock inicial.
 {
   "nombre": "Gasa estéril 10 x 10",
   "costo": 180.00,
-  "stock": 100
+  "stock": 100,
+  "vence": true,
+  "vencimiento": "2028-04-09",
+  "lote": "GA-1102"
 }
 ```
+
+`vencimiento` y `lote` (el número del fabricante) son los del primer lote, L1 (029): si hay stock, vencimiento o número de lote, se crea ese lote con el stock.
 
 Si `stock` es mayor que 0, se registra también un movimiento `ENTRADA` con motivo `CARGA_VETERINARIO` por esa cantidad, así el stock inicial queda en el historial. El insumo y el movimiento se guardan juntos: si falla uno, no se guarda ninguno.
 
@@ -166,7 +202,7 @@ Si `stock` es mayor que 0, se registra también un movimiento `ENTRADA` con moti
 
 ## PUT /api/inventario/insumos/{id}
 
-Edita el nombre y el costo. **No cambia el stock**: el stock solo cambia con la carga de stock (o cuando una consulta lo descuenta), para que cada variación quede registrada en los movimientos. Si el pedido trae `stock`, se ignora.
+Edita el nombre y el costo (y, si vienen, `aplicacion` y `vence`). **No cambia el stock**: el stock solo cambia con la carga de stock (o cuando una consulta lo descuenta), para que cada variación quede registrada en los movimientos. Si el pedido trae `stock`, se ignora. `vence` (029) se cambia solo con el insumo sin stock (si no, `400` con `campos.vence`).
 
 **Pedido:**
 
@@ -222,18 +258,25 @@ Deshace la baja: el insumo vuelve con `activo: true`, con el stock y el historia
 
 ## POST /api/inventario/insumos/{id}/stock
 
-Suma unidades al stock y registra un movimiento `ENTRADA` con motivo `CARGA_VETERINARIO`, a nombre del veterinario de la sesión. Si el insumo estaba `EN_FALTA`, pasa a `DISPONIBLE`. El stock, el estado y el movimiento se guardan juntos: si falla uno, no se guarda ninguno.
+Suma unidades a un lote y registra un movimiento `ENTRADA` con motivo `CARGA_VETERINARIO`, a nombre del veterinario de la sesión. Si el insumo estaba `EN_FALTA` o `YA_PEDIDO`, pasa a `DISPONIBLE`. El stock, el estado y el movimiento se guardan juntos: si falla uno, no se guarda ninguno.
 
-**Pedido:**
+**Pedido** (029), uno de tres, igual que en productos (`contrato.md`, `POST .../stock`):
 
 ```json
+{ "cantidad": 10, "lote_id": 21 }
+{ "cantidad": 10, "lote": { "codigo": "VS-0911", "vencimiento": "2027-04-25" } }
 { "cantidad": 10 }
 ```
+
+- `lote_id`: a un lote que ya existe, sin vencer y que siga la regla de `vence`.
+- `lote`: a un lote nuevo, con el número que sigue. `vencimiento` es obligatorio si el insumo vence y tiene que ir vacío si no vence.
+- Sin ninguno de los dos: solo si el insumo no vence, a su lote sin vencimiento.
 
 **200 OK:**
 
 ```json
-{ "id": 107, "stock": 10, "estado": "DISPONIBLE", "stock_bajo": true }
+{ "id": 107, "stock": 10, "estado": "DISPONIBLE", "stock_bajo": true, "stock_sin_vencer": 10, "vencimiento": "2027-04-25",
+  "lote": { "id": 21, "numero": 2, "nombre": "L2 (VS-0911)", "codigo": "VS-0911", "vencimiento": "2027-04-25", "stock": 10, "vencido": false } }
 ```
 
 **Errores:**
@@ -247,8 +290,17 @@ Suma unidades al stock y registra un movimiento `ENTRADA` con motivo `CARGA_VETE
   }
   ```
 
+- `400` con `campos.lote_id` ("Ese lote no es de este insumo", "Ese lote está vencido: cargá en otro o creá uno nuevo", "Ese lote no sigue la regla del insumo…" o "Este insumo vence: elegí un lote o creá uno nuevo con su vencimiento"), o con `campos["lote.codigo"]` o `campos["lote.vencimiento"]` si el lote nuevo es inválido.
 - `404`, si el insumo no existe.
 - `409`, si el insumo está dado de baja: `{ "error": "El insumo está dado de baja" }`.
+
+---
+
+## PUT /api/inventario/insumos/{id}/lotes/{lote}
+
+(029) Corrige el número del fabricante o el vencimiento de un lote mal cargado: `{ "codigo": "VS-0911", "vencimiento": "2027-04-25" }`, con las mismas reglas que en productos (el vencimiento es obligatorio si el insumo vence, vacío si no; puede ser pasado). No cambia el stock ni el número.
+
+**200 OK:** el insumo completo, como en `GET /api/inventario/insumos/{id}`. **Errores:** `400` (`campos.codigo` o `campos.vencimiento`) y `404` si el insumo no existe o el lote no es suyo.
 
 ---
 
@@ -256,16 +308,12 @@ Suma unidades al stock y registra un movimiento `ENTRADA` con motivo `CARGA_VETE
 
 Resta unidades del stock sin que haya una consulta (por ejemplo, el veterinario se lleva una jeringa para su mascota) y registra un movimiento `SALIDA` con motivo `AJUSTE`, a nombre del veterinario de la sesión. Así toda salida queda registrada, aunque no venga de una consulta. Si el stock llega a 0, el insumo pasa a `EN_FALTA`. El stock, el estado y el movimiento se guardan juntos: si falla uno, no se guarda ninguno.
 
-**Pedido:**
-
-```json
-{ "cantidad": 1 }
-```
+**Pedido:** `{ "cantidad": 1, "lote_id": 21 }`. Sin `lote_id` (029), sale de los lotes que vencen primero, los vencidos antes que nada.
 
 **200 OK:**
 
 ```json
-{ "id": 101, "stock": 199, "estado": "DISPONIBLE", "stock_bajo": false }
+{ "id": 101, "stock": 199, "estado": "DISPONIBLE", "stock_bajo": false, "stock_sin_vencer": 199, "vencimiento": "2028-10-26" }
 ```
 
 **Errores:**
@@ -273,7 +321,8 @@ Resta unidades del stock sin que haya una consulta (por ejemplo, el veterinario 
 - `400`, si la cantidad no es un entero entre 1 y 100.000 (mismo mensaje que la carga de stock).
 - `404`, si el insumo no existe.
 - `409`, si el insumo está dado de baja: `{ "error": "El insumo está dado de baja" }`.
-- `409`, si se quiere retirar más de lo que hay. No se descuenta nada:
+- `400` con `campos.lote_id`, si el lote no es de este insumo.
+- `409`, si se quiere retirar más de lo que hay (en el lote, si se eligió uno). No se descuenta nada:
 
   ```json
   { "error": "Stock insuficiente", "stock": 3 }
@@ -353,5 +402,5 @@ Historial de movimientos de un insumo, del más reciente al más antiguo.
 
 ## Para los otros módulos
 
-- **Pacientes (consultas):** lee `nombre`, `costo`, `stock`, `estado` y `activo` directo de la tabla `insumo`, con su usuario de MySQL `pacientes` (solo lectura). No usa estos endpoints.
-- **Descuento de stock:** cuando se finaliza una consulta, el stock de los insumos lo descuenta Inventario en `POST /internal/stock/descontar` (contrato interno, rol 1). Ese descuento también actualiza el estado: si el stock llega a 0, el insumo queda `EN_FALTA` (salvo que esté `YA_PEDIDO`, que se conserva).
+- **Pacientes (consultas):** lee `nombre`, `costo`, `stock`, `estado` y `activo` directo de la tabla `insumo`, con su usuario de MySQL `pacientes` (solo lectura). No usa estos endpoints. (029) `insumo.stock` es la suma de los lotes, vencidos incluidos, e `insumo.fecha_vencimiento` el del próximo lote que vence: los mantiene Inventario.
+- **Descuento de stock:** cuando se finaliza una consulta, el stock de los insumos lo descuenta Inventario en `POST /internal/stock/descontar` (contrato interno, rol 1), del lote sin vencer que vence primero (029). Ese descuento también actualiza el estado: si el stock llega a 0, el insumo queda `EN_FALTA` (salvo que esté `YA_PEDIDO`, que se conserva).

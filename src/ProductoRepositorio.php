@@ -7,6 +7,8 @@
 // - Convierte los tipos que devuelve MySQL (DECIMAL llega como texto, BOOLEAN como 0/1) a los del JSON.
 // - El stock está en los lotes (migración 028, clase Lotes): cargar y retirar cambian un lote, y
 //   "vencimiento" es el del próximo lote con stock que vence.
+// - "vence" (migración 029): si el producto tiene vencimiento. Si vence, cada lote nuevo lleva su
+//   fecha; si no, ninguno. Se cambia solo con el stock en 0 (lo controla ProductoControlador).
 class ProductoRepositorio
 {
     // Columnas que se devuelven en todos los formatos (tabla producto "p").
@@ -114,10 +116,10 @@ class ProductoRepositorio
     public function listarTodos(): array
     {
         $consulta = $this->db->query(
-            'SELECT ' . self::COLUMNAS . ', p.stock, ' . Lotes::STOCK_VENDIBLE . ' AS stock_vendible, p.activo
+            'SELECT ' . self::COLUMNAS . ', p.stock, ' . Lotes::STOCK_VENDIBLE . ' AS stock_vendible, p.vence, p.activo
              FROM producto p ORDER BY p.nombre, p.id'
         );
-        $lotes = (new Lotes($this->db))->deProductos();
+        $lotes = (new Lotes($this->db))->listar();
 
         return array_map(
             fn (array $fila) => $this->formatear($fila) + ['lotes' => $lotes[(int) $fila['id']] ?? []],
@@ -130,7 +132,7 @@ class ProductoRepositorio
     {
         $consulta = $this->db->prepare(
             'SELECT ' . self::COLUMNAS . ', p.descripcion, p.stock, ' . Lotes::STOCK_VENDIBLE . ' AS stock_vendible,
-                    p.activo, p.imagen, p.imagen_tipo
+                    p.vence, p.activo, p.imagen, p.imagen_tipo
              FROM producto p WHERE p.id = ?'
         );
         $consulta->execute([$id]);
@@ -139,19 +141,27 @@ class ProductoRepositorio
             return null;
         }
 
-        return $this->formatear($fila) + ['lotes' => (new Lotes($this->db))->deProductos($id)[$id] ?? []];
+        return $this->formatear($fila) + ['lotes' => (new Lotes($this->db))->listar($id)[$id] ?? []];
     }
 
     public function existe(int $id): bool
     {
-        $consulta = $this->db->prepare('SELECT COUNT(*) FROM producto WHERE id = ?');
-        $consulta->execute([$id]);
+        return $this->vence($id) !== null;
+    }
 
-        return (int) $consulta->fetchColumn() > 0;
+    // Si el producto vence y su stock ({vence, stock}), o null si no existe. Para validar la carga de
+    // stock, la corrección de un lote y el cambio de "vence".
+    public function vence(int $id): ?array
+    {
+        $consulta = $this->db->prepare('SELECT vence, stock FROM producto WHERE id = ?');
+        $consulta->execute([$id]);
+        $fila = $consulta->fetch();
+
+        return $fila === false ? null : ['vence' => (bool) $fila['vence'], 'stock' => (int) $fila['stock']];
     }
 
     // Crea el producto y devuelve su id. Si tiene stock inicial, vencimiento o número de lote, crea su
-    // primer lote y registra el movimiento de entrada.
+    // primer lote (L1) y registra el movimiento de entrada.
     // Todo va en una transacción: o se guarda todo, o nada.
     public function insertar(array $datos, int $usuarioId): int
     {
@@ -161,8 +171,8 @@ class ProductoRepositorio
         try {
             $consulta = $this->db->prepare(
                 'INSERT INTO producto
-                     (nombre, descripcion, precio, stock, categoria, especie_destino, imagen, imagen_tipo)
-                 VALUES (?, ?, ?, 0, ?, ?, ?, ?)'
+                     (nombre, descripcion, precio, stock, categoria, especie_destino, imagen, imagen_tipo, vence)
+                 VALUES (?, ?, ?, 0, ?, ?, ?, ?, ?)'
             );
             $consulta->bindValue(1, $datos['nombre']);
             $consulta->bindValue(2, $datos['descripcion']);
@@ -171,6 +181,7 @@ class ProductoRepositorio
             $consulta->bindValue(5, $datos['especie']);
             $consulta->bindValue(6, $imagen, $imagen === null ? PDO::PARAM_NULL : PDO::PARAM_LOB);
             $consulta->bindValue(7, $imagenTipo);
+            $consulta->bindValue(8, $datos['vence'] ? 1 : 0, PDO::PARAM_INT);
             $consulta->execute();
 
             $id = (int) $this->db->lastInsertId();
@@ -180,7 +191,7 @@ class ProductoRepositorio
                 $loteId = $lotes->crear($id, $datos['lote'], $datos['vencimiento']);
                 if ($datos['stock'] > 0) {
                     $lotes->sumar($loteId, $datos['stock']);
-                    $this->registrarMovimiento($id, 'ENTRADA', 'CARGA_VETERINARIO', $datos['stock'], $usuarioId, $loteId);
+                    $lotes->movimiento($id, $loteId, 'ENTRADA', 'CARGA_VETERINARIO', $datos['stock'], $usuarioId);
                 }
                 $lotes->sincronizar($id);
             }
@@ -195,11 +206,14 @@ class ProductoRepositorio
     }
 
     // Edita los datos (nunca el stock, los lotes ni el estado activo: el vencimiento es de cada lote).
-    // Si en los datos no está la clave "imagen", la imagen actual no se toca.
+    // Si en los datos no está la clave "imagen", la imagen actual no se toca; lo mismo con "vence".
     public function actualizar(int $id, array $datos): void
     {
         $sql = 'UPDATE producto SET nombre = ?, descripcion = ?, precio = ?, categoria = ?,
                     especie_destino = ?';
+        if (array_key_exists('vence', $datos)) {
+            $sql .= ', vence = ' . ($datos['vence'] ? '1' : '0');
+        }
         if (array_key_exists('imagen', $datos)) {
             $sql .= ', imagen = ?, imagen_tipo = ?';
         }
@@ -238,35 +252,30 @@ class ProductoRepositorio
     }
 
     // Suma stock a un lote y registra el movimiento de entrada, en una transacción. El lote es
-    // $loteId (de ese producto), uno nuevo ($nuevo: {codigo, vencimiento}) o, si no viene ninguno, el
-    // lote sin vencimiento (los accesorios no muestran lotes).
-    // Devuelve ['stock' => total, 'lote' => el lote], o 'baja' (dado de baja) o 'lote_inexistente'.
+    // $loteId (de ese producto), uno nuevo ($nuevo: {codigo, vencimiento}, ya validado) o, si no viene
+    // ninguno y el producto no vence, su lote sin vencimiento (Lotes::paraCargar).
+    // Devuelve ['stock' => total, 'lote' => el lote], o 'baja' (dado de baja) o el motivo de
+    // Lotes::paraCargar ('lote_inexistente', 'lote_vencido', 'lote_no_corresponde', 'falta_lote').
     public function cargarStock(int $id, int $cantidad, int $usuarioId, ?int $loteId = null, ?array $nuevo = null): array|string
     {
         $this->db->beginTransaction();
         try {
             // Se bloquea el producto: dos cargas al mismo tiempo esperan una a la otra.
-            $consulta = $this->db->prepare('SELECT activo FROM producto WHERE id = ? FOR UPDATE');
-            $consulta->execute([$id]);
-            if (!(bool) $consulta->fetchColumn()) {
+            $lotes = new Lotes($this->db);
+            $producto = $lotes->bloquear($id);
+            if ($producto === null || !$producto['activo']) {
                 $this->db->rollBack();
                 return 'baja';
             }
 
-            $lotes = new Lotes($this->db);
-            if ($loteId !== null) {
-                if ($lotes->buscar($id, $loteId) === null) {
-                    $this->db->rollBack();
-                    return 'lote_inexistente';
-                }
-            } elseif ($nuevo !== null) {
-                $loteId = $lotes->crear($id, $nuevo['codigo'], $nuevo['vencimiento']);
-            } else {
-                $loteId = $lotes->sinVencimiento($id);
+            $loteId = $lotes->paraCargar($id, $producto['vence'], $loteId, $nuevo);
+            if (is_string($loteId)) {
+                $this->db->rollBack();
+                return $loteId;
             }
 
             $lotes->sumar($loteId, $cantidad);
-            $this->registrarMovimiento($id, 'ENTRADA', 'CARGA_VETERINARIO', $cantidad, $usuarioId, $loteId);
+            $lotes->movimiento($id, $loteId, 'ENTRADA', 'CARGA_VETERINARIO', $cantidad, $usuarioId);
             $lotes->sincronizar($id);
             $resultado = ['stock' => $this->stock($id), 'lote' => $lotes->buscar($id, $loteId)];
 
@@ -288,34 +297,21 @@ class ProductoRepositorio
     {
         $this->db->beginTransaction();
         try {
-            $consulta = $this->db->prepare('SELECT activo, stock FROM producto WHERE id = ? FOR UPDATE');
-            $consulta->execute([$id]);
-            $producto = $consulta->fetch();
-            if ($producto === false || !(bool) $producto['activo']) {
+            $lotes = new Lotes($this->db);
+            $producto = $lotes->bloquear($id);
+            if ($producto === null || !$producto['activo']) {
                 $this->db->rollBack();
                 return 'baja';
             }
 
-            $lotes = new Lotes($this->db);
-            if ($loteId !== null) {
-                $lote = $lotes->buscar($id, $loteId);
-                if ($lote === null) {
-                    $this->db->rollBack();
-                    return 'lote_inexistente';
-                }
-                $partes = $lotes->restar($loteId, $cantidad) ? [[$loteId, $cantidad]] : null;
-                $hay = $lote['stock'];
-            } else {
-                $partes = $lotes->sacar($id, $cantidad, null, true);
-                $hay = (int) $producto['stock'];
-            }
-            if ($partes === null) {
+            $partes = $lotes->retirar($id, $cantidad, $loteId, $producto['stock']);
+            if (is_string($partes) || $partes[0] === 'insuficiente') {
                 $this->db->rollBack();
-                return ['insuficiente', $hay];
+                return $partes;
             }
 
             foreach ($partes as [$deLote, $tomadas]) {
-                $this->registrarMovimiento($id, 'SALIDA', 'AJUSTE', $tomadas, $usuarioId, $deLote);
+                $lotes->movimiento($id, $deLote, 'SALIDA', 'AJUSTE', $tomadas, $usuarioId);
             }
             $lotes->sincronizar($id);
             $stock = $this->stock($id);
@@ -329,16 +325,15 @@ class ProductoRepositorio
         return $stock;
     }
 
-    // Corrige el número o el vencimiento de un lote (por ejemplo, se cargó mal). $datos: {codigo,
-    // vencimiento}, ya validados. false si el lote no es de ese producto.
+    // Corrige el número del fabricante o el vencimiento de un lote (por ejemplo, se cargó mal). $datos:
+    // {codigo, vencimiento}, ya validados. false si el lote no es de ese producto.
     public function editarLote(int $id, int $loteId, array $datos): bool
     {
         $this->db->beginTransaction();
         try {
-            $consulta = $this->db->prepare('UPDATE lote_producto SET codigo = ?, vencimiento = ? WHERE id = ? AND producto_id = ?');
-            $consulta->execute([$datos['codigo'], $datos['vencimiento'], $loteId, $id]);
-            $existe = (new Lotes($this->db))->buscar($id, $loteId) !== null;
-            (new Lotes($this->db))->sincronizar($id);
+            $lotes = new Lotes($this->db);
+            $existe = $lotes->editar($id, $loteId, $datos);
+            $lotes->sincronizar($id);
             $this->db->commit();
         } catch (Throwable $error) {
             $this->db->rollBack();
@@ -369,7 +364,8 @@ class ProductoRepositorio
     {
         $sql = "SELECT m.id, DATE_FORMAT(m.fecha, '%Y-%m-%d %H:%i:%s') AS fecha, m.tipo, m.motivo, m.cantidad,
                        m.producto_id, p.nombre AS producto, u.nombre AS usuario, m.id_operacion,
-                       l.id AS lote_id, l.codigo AS lote_codigo, DATE_FORMAT(l.vencimiento, '%Y-%m-%d') AS lote_vencimiento
+                       l.id AS lote_id, l.numero AS lote_numero, l.codigo AS lote_codigo,
+                       DATE_FORMAT(l.vencimiento, '%Y-%m-%d') AS lote_vencimiento
                 FROM movimiento_inventario m
                 JOIN producto p ON p.id = m.producto_id
                 LEFT JOIN lote_producto l ON l.id = m.lote_id
@@ -401,23 +397,15 @@ class ProductoRepositorio
             'producto_id' => (int) $fila['producto_id'],
             'producto' => $fila['producto'],
             'usuario' => $fila['usuario'],
-            // De qué lote (028): {id, codigo, vencimiento}, o null en los de antes sin lote.
+            // De qué lote (028): {id, numero, nombre, codigo, vencimiento}, o null en los de antes sin lote.
             'lote' => $fila['lote_id'] === null ? null : [
                 'id' => (int) $fila['lote_id'],
+                'numero' => $fila['lote_numero'] === null ? null : (int) $fila['lote_numero'],
+                'nombre' => Lotes::nombre($fila['lote_numero'] === null ? null : (int) $fila['lote_numero'], $fila['lote_codigo']),
                 'codigo' => $fila['lote_codigo'],
                 'vencimiento' => $fila['lote_vencimiento'],
             ],
         ] + ReferenciaMovimiento::de($fila['id_operacion']), $consulta->fetchAll());
-    }
-
-    // Se llama siempre dentro de una transacción.
-    private function registrarMovimiento(int $productoId, string $tipo, string $motivo, int $cantidad, int $usuarioId, int $loteId): void
-    {
-        $consulta = $this->db->prepare(
-            'INSERT INTO movimiento_inventario (producto_id, lote_id, tipo, cantidad, motivo, usuario_id)
-             VALUES (?, ?, ?, ?, ?, ?)'
-        );
-        $consulta->execute([$productoId, $loteId, $tipo, $cantidad, $motivo, $usuarioId]);
     }
 
     // Pasa una fila de MySQL al formato del contrato: números como números, booleanos como booleanos,
@@ -450,6 +438,10 @@ class ProductoRepositorio
 
         if (array_key_exists('disponible', $fila)) {
             $producto['disponible'] = (bool) $fila['disponible'];
+        }
+        // Si vence (029): solo en el panel.
+        if (array_key_exists('vence', $fila)) {
+            $producto['vence'] = (bool) $fila['vence'];
         }
         if (array_key_exists('activo', $fila)) {
             $producto['activo'] = (bool) $fila['activo'];
