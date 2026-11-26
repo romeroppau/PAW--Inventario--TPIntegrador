@@ -20,4 +20,6 @@ $router->post('/api/inventario/insumos/{id}/pedido', [InsumoControlador::class, 
 $router->delete('/api/inventario/insumos/{id}/pedido', [InsumoControlador::class, 'desmarcarPedido']);
 $router->post('/api/inventario/insumos/{id}/stock', [InsumoControlador::class, 'cargarStock']);
 $router->post('/api/inventario/insumos/{id}/retiro', [InsumoControlador::class, 'retirar']);
+// Corregir el número del fabricante o el vencimiento de un lote (migración 029).
+$router->put('/api/inventario/insumos/{id}/lotes/{lote}', [InsumoControlador::class, 'editarLote']);
 $router->get('/api/inventario/insumos/{id}/movimientos', [InsumoControlador::class, 'movimientos']);

@@ -55,7 +55,7 @@ class PromocionTest extends TestCase
     {
         [, $errores] = Promocion::validar(['porcentaje' => 20, 'hasta' => '2026-12-11'], $this->hoy(), '2026-12-10');
 
-        $this->assertSame('El producto vence el 10/12/2026: la promoción no puede durar más que eso', $errores['hasta']);
+        $this->assertSame('El lote vence el 10/12/2026: la promoción no puede durar más que eso', $errores['hasta']);
     }
 
     public function testLaFechaTieneQueExistir(): void

@@ -5,14 +5,17 @@
 // - Todas las consultas son parametrizadas ("?"): los datos van separados del SQL (evita la inyección SQL).
 // - Las reglas del insumo (estado según el stock, stock bajo) están en la clase Insumo: acá se
 //   usan, no se repiten.
-// - Cada vez que cambia el stock se guarda también la columna estado, para que Pacientes, que lee
-//   la tabla directo, vea el estado correcto.
+// - Desde la migración 029 el stock está en lotes (clase Lotes, igual que los productos): cargar y
+//   retirar cambian un lote, y Lotes::sincronizar() deja en insumo el stock (la suma), el próximo
+//   vencimiento y el estado, para que Pacientes, que lee la tabla directo, vea lo correcto.
+// - "vence": si el insumo tiene vencimiento. Si vence, cada lote nuevo lleva su fecha; si no, ninguno.
 class InsumoRepositorio
 {
-    private const COLUMNAS = 'id, nombre, aplicacion, stock, costo, estado, activo';
+    private const COLUMNAS = 'i.id, i.nombre, i.aplicacion, i.stock, i.costo, i.estado, i.activo, i.vence, '
+        . Lotes::STOCK_SIN_VENCER_INSUMO . ' AS stock_sin_vencer, ' . Lotes::PROXIMO_VENCIMIENTO_INSUMO . ' AS vencimiento';
 
     // Recibe la conexión de afuera, así las pruebas pueden usar otra base.
-    // Hora de Argentina (-03:00) para las fechas de los movimientos, igual que en productos.
+    // Hora de Argentina (-03:00) para las fechas de los movimientos y el CURDATE() de los vencimientos.
     public function __construct(private PDO $db)
     {
         $this->db->exec("SET time_zone = '-03:00'");
@@ -22,15 +25,21 @@ class InsumoRepositorio
     // Devuelve una lista de objetos Insumo.
     public function listarTodos(): array
     {
-        $consulta = $this->db->query('SELECT ' . self::COLUMNAS . ' FROM insumo ORDER BY nombre, id');
+        $consulta = $this->db->query('SELECT ' . self::COLUMNAS . ' FROM insumo i ORDER BY i.nombre, i.id');
 
         return array_map([Insumo::class, 'desdeFila'], $consulta->fetchAll());
+    }
+
+    // Los lotes de todos los insumos (o de uno), para el panel: [insumo_id => [lotes]].
+    public function lotes(?int $id = null): array
+    {
+        return $this->lotesDeInsumos()->listar($id);
     }
 
     // Un insumo, o null si no existe.
     public function buscarPorId(int $id): ?Insumo
     {
-        $consulta = $this->db->prepare('SELECT ' . self::COLUMNAS . ' FROM insumo WHERE id = ?');
+        $consulta = $this->db->prepare('SELECT ' . self::COLUMNAS . ' FROM insumo i WHERE i.id = ?');
         $consulta->execute([$id]);
         $fila = $consulta->fetch();
 
@@ -38,8 +47,8 @@ class InsumoRepositorio
     }
 
     // Crea el insumo y devuelve su id. El estado sale del stock inicial (clase Insumo).
-    // Si tiene stock inicial, registra también el movimiento de entrada.
-    // Las dos cosas van en una transacción: o se guardan las dos, o ninguna.
+    // Si tiene stock inicial, vencimiento o número de lote, crea su primer lote (L1) y registra el
+    // movimiento de entrada. Todo va en una transacción: o se guarda todo, o nada.
     public function insertar(array $datos, int $usuarioId): int
     {
         $nuevo = new Insumo(0, $datos['nombre'], $datos['stock'], $datos['costo'], true, false, $datos['aplicacion'] ?? null);
@@ -47,20 +56,26 @@ class InsumoRepositorio
         $this->db->beginTransaction();
         try {
             $consulta = $this->db->prepare(
-                'INSERT INTO insumo (nombre, aplicacion, stock, costo, estado) VALUES (?, ?, ?, ?, ?)'
+                'INSERT INTO insumo (nombre, aplicacion, stock, costo, estado, vence) VALUES (?, ?, 0, ?, ?, ?)'
             );
             $consulta->execute([
                 $nuevo->nombre,
                 $nuevo->aplicacion,
-                $nuevo->stock,
                 number_format($nuevo->costo, 2, '.', ''),
-                $nuevo->estado()
+                $nuevo->estado(),
+                $datos['vence'] ? 1 : 0,
             ]);
 
             $id = (int) $this->db->lastInsertId();
 
-            if ($nuevo->stock > 0) {
-                $this->registrarMovimiento($id, 'ENTRADA', 'CARGA_VETERINARIO', $nuevo->stock, $usuarioId);
+            if ($datos['stock'] > 0 || $datos['vencimiento'] !== null || $datos['lote'] !== null) {
+                $lotes = $this->lotesDeInsumos();
+                $loteId = $lotes->crear($id, $datos['lote'], $datos['vencimiento']);
+                if ($datos['stock'] > 0) {
+                    $lotes->sumar($loteId, $datos['stock']);
+                    $lotes->movimiento($id, $loteId, 'ENTRADA', 'CARGA_VETERINARIO', $datos['stock'], $usuarioId);
+                }
+                $lotes->sincronizar($id);
             }
 
             $this->db->commit();
@@ -72,17 +87,23 @@ class InsumoRepositorio
         return $id;
     }
 
-    // Edita nombre, costo y (si vino) la aplicación del calendario. Nunca el stock, el estado ni activo.
+    // Edita nombre, costo y (si vinieron) la aplicación del calendario y "vence". Nunca el stock, el
+    // estado ni activo. InsumoControlador controla que "vence" cambie solo sin stock.
     public function actualizar(int $id, array $datos): void
     {
+        $sql = 'UPDATE insumo SET nombre = ?, costo = ?';
+        $parametros = [$datos['nombre'], number_format($datos['costo'], 2, '.', '')];
         if (array_key_exists('aplicacion', $datos)) {
-            $consulta = $this->db->prepare('UPDATE insumo SET nombre = ?, costo = ?, aplicacion = ? WHERE id = ?');
-            $consulta->execute([$datos['nombre'], number_format($datos['costo'], 2, '.', ''), $datos['aplicacion'], $id]);
-            return;
+            $sql .= ', aplicacion = ?';
+            $parametros[] = $datos['aplicacion'];
         }
+        if (array_key_exists('vence', $datos)) {
+            $sql .= ', vence = ?';
+            $parametros[] = $datos['vence'] ? 1 : 0;
+        }
+        $parametros[] = $id;
 
-        $consulta = $this->db->prepare('UPDATE insumo SET nombre = ?, costo = ? WHERE id = ?');
-        $consulta->execute([$datos['nombre'], number_format($datos['costo'], 2, '.', ''), $id]);
+        $this->db->prepare($sql . ' WHERE id = ?')->execute($parametros);
     }
 
     // Baja lógica: el insumo queda inactivo y conserva su historial. Nunca se borra la fila.
@@ -116,7 +137,7 @@ class InsumoRepositorio
             } else {
                 $insumo->pedido = false;
             }
-            $this->guardarStock($insumo);
+            $this->db->prepare('UPDATE insumo SET estado = ? WHERE id = ?')->execute([$insumo->estado(), $id]);
 
             $this->db->commit();
         } catch (Throwable $error) {
@@ -127,21 +148,33 @@ class InsumoRepositorio
         return $insumo;
     }
 
-    // Carga de stock (UML: reponer). Suma, recalcula el estado y registra la ENTRADA.
-    // Devuelve el insumo actualizado, o null si no existe o está dado de baja.
-    public function cargarStock(int $id, int $cantidad, int $usuarioId): ?Insumo
+    // Carga de stock (UML: reponer) en un lote: $loteId (que ya existe), uno nuevo ($nuevo: {codigo,
+    // vencimiento}, ya validado) o, si no viene ninguno y el insumo no vence, su lote sin vencimiento
+    // (Lotes::paraCargar). Registra la ENTRADA. Llegó el pedido: deja de estar "Ya pedido".
+    // Devuelve [el insumo actualizado, el lote], 'baja' (no existe o está dado de baja) o el motivo
+    // de Lotes::paraCargar.
+    public function cargarStock(int $id, int $cantidad, int $usuarioId, ?int $loteId = null, ?array $nuevo = null): array|string
     {
         $this->db->beginTransaction();
         try {
-            $insumo = $this->bloquear($id);
-            if ($insumo === null || !$insumo->activo) {
+            $lotes = $this->lotesDeInsumos();
+            $actual = $lotes->bloquear($id);
+            if ($actual === null || !$actual['activo']) {
                 $this->db->rollBack();
-                return null;
+                return 'baja';
             }
 
-            $insumo->reponer($cantidad);
-            $this->guardarStock($insumo);
-            $this->registrarMovimiento($id, 'ENTRADA', 'CARGA_VETERINARIO', $cantidad, $usuarioId);
+            $loteId = $lotes->paraCargar($id, $actual['vence'], $loteId, $nuevo);
+            if (is_string($loteId)) {
+                $this->db->rollBack();
+                return $loteId;
+            }
+
+            $lotes->sumar($loteId, $cantidad);
+            $lotes->movimiento($id, $loteId, 'ENTRADA', 'CARGA_VETERINARIO', $cantidad, $usuarioId);
+            $this->db->prepare("UPDATE insumo SET estado = 'DISPONIBLE' WHERE id = ?")->execute([$id]);
+            $lotes->sincronizar($id);
+            $lote = $lotes->buscar($id, $loteId);
 
             $this->db->commit();
         } catch (Throwable $error) {
@@ -149,24 +182,34 @@ class InsumoRepositorio
             throw $error;
         }
 
-        return $insumo;
+        return [$this->buscarPorId($id), $lote];
     }
 
-    // Retiro manual, sin consulta (UML: descontarStock). Resta, recalcula el estado y registra
-    // la SALIDA con motivo AJUSTE (en la pantalla: "Retiro manual (sin consulta)").
-    // Devuelve el insumo actualizado, o null si no existe, está dado de baja o no alcanza el stock.
-    public function retirarStock(int $id, int $cantidad, int $usuarioId): ?Insumo
+    // Retiro manual, sin consulta (UML: descontarStock): de $loteId o, si no viene, de los lotes que
+    // vencen primero (los vencidos antes que nada). Registra la SALIDA con motivo AJUSTE (en la
+    // pantalla: "Retiro manual (sin consulta)"). Devuelve el insumo actualizado, 'baja',
+    // 'lote_inexistente' o ['insuficiente', lo que hay].
+    public function retirarStock(int $id, int $cantidad, int $usuarioId, ?int $loteId = null): Insumo|string|array
     {
         $this->db->beginTransaction();
         try {
-            $insumo = $this->bloquear($id);
-            if ($insumo === null || !$insumo->activo || !$insumo->descontarStock($cantidad)) {
+            $lotes = $this->lotesDeInsumos();
+            $actual = $lotes->bloquear($id);
+            if ($actual === null || !$actual['activo']) {
                 $this->db->rollBack();
-                return null;
+                return 'baja';
             }
 
-            $this->guardarStock($insumo);
-            $this->registrarMovimiento($id, 'SALIDA', 'AJUSTE', $cantidad, $usuarioId);
+            $partes = $lotes->retirar($id, $cantidad, $loteId, $actual['stock']);
+            if (is_string($partes) || $partes[0] === 'insuficiente') {
+                $this->db->rollBack();
+                return $partes;
+            }
+
+            foreach ($partes as [$deLote, $tomadas]) {
+                $lotes->movimiento($id, $deLote, 'SALIDA', 'AJUSTE', $tomadas, $usuarioId);
+            }
+            $lotes->sincronizar($id);
 
             $this->db->commit();
         } catch (Throwable $error) {
@@ -174,20 +217,39 @@ class InsumoRepositorio
             throw $error;
         }
 
-        return $insumo;
+        return $this->buscarPorId($id);
     }
 
-    // Historial de movimientos de insumos, del más reciente al más antiguo, con el insumo y el
-    // nombre de quien lo registró. Con un id, solo los de ese insumo; con null, los de todos.
+    // Corrige el número del fabricante o el vencimiento de un lote. $datos: {codigo, vencimiento}, ya
+    // validados. false si el lote no es de ese insumo.
+    public function editarLote(int $id, int $loteId, array $datos): bool
+    {
+        $this->db->beginTransaction();
+        try {
+            $lotes = $this->lotesDeInsumos();
+            $existe = $lotes->editar($id, $loteId, $datos);
+            $lotes->sincronizar($id);
+            $this->db->commit();
+        } catch (Throwable $error) {
+            $this->db->rollBack();
+            throw $error;
+        }
+
+        return $existe;
+    }
+
     // Los movimientos de los insumos (o de uno), del más reciente al más antiguo. $desde y $hasta
-    // (AAAA-MM-DD, inclusive) filtran por el día del movimiento. Cada uno trae de dónde salió
-    // (consulta_id o compra, ReferenciaMovimiento).
+    // (AAAA-MM-DD, inclusive) filtran por el día del movimiento. Cada uno trae el nombre de quien lo
+    // registró, de qué lote (029) y de dónde salió (consulta_id o compra, ReferenciaMovimiento).
     public function movimientos(?int $insumoId = null, ?string $desde = null, ?string $hasta = null): array
     {
         $sql = "SELECT m.id, DATE_FORMAT(m.fecha, '%Y-%m-%d %H:%i:%s') AS fecha, m.tipo, m.motivo, m.cantidad,
-                       m.insumo_id, i.nombre AS insumo, u.nombre AS usuario, m.id_operacion
+                       m.insumo_id, i.nombre AS insumo, u.nombre AS usuario, m.id_operacion,
+                       l.id AS lote_id, l.numero AS lote_numero, l.codigo AS lote_codigo,
+                       DATE_FORMAT(l.vencimiento, '%Y-%m-%d') AS lote_vencimiento
                 FROM movimiento_inventario m
                 JOIN insumo i ON i.id = m.insumo_id
+                LEFT JOIN lote_insumo l ON l.id = m.lote_insumo_id
                 LEFT JOIN usuario u ON u.id = m.usuario_id
                 WHERE 1 = 1";
         $parametros = [];
@@ -217,36 +279,31 @@ class InsumoRepositorio
             'insumo_id' => (int) $fila['insumo_id'],
             'insumo' => $fila['insumo'],
             'usuario' => $fila['usuario'],
+            // De qué lote (029): {id, numero, nombre, codigo, vencimiento}, o null en los de antes.
+            'lote' => $fila['lote_id'] === null ? null : [
+                'id' => (int) $fila['lote_id'],
+                'numero' => (int) $fila['lote_numero'],
+                'nombre' => Lotes::nombre((int) $fila['lote_numero'], $fila['lote_codigo']),
+                'codigo' => $fila['lote_codigo'],
+                'vencimiento' => $fila['lote_vencimiento'],
+            ],
         ] + ReferenciaMovimiento::de($fila['id_operacion']), $consulta->fetchAll());
     }
 
     // Lee el insumo y BLOQUEA su fila hasta el final de la transacción (FOR UPDATE).
-    // Si dos personas cargan o retiran al mismo tiempo, la segunda espera a que termine la primera,
-    // así ninguna trabaja con un stock viejo. Se llama siempre dentro de una transacción.
+    // Si dos personas lo cambian al mismo tiempo, la segunda espera a que termine la primera,
+    // así ninguna trabaja con datos viejos. Se llama siempre dentro de una transacción.
     private function bloquear(int $id): ?Insumo
     {
-        $consulta = $this->db->prepare('SELECT ' . self::COLUMNAS . ' FROM insumo WHERE id = ? FOR UPDATE');
+        $consulta = $this->db->prepare('SELECT ' . self::COLUMNAS . ' FROM insumo i WHERE i.id = ? FOR UPDATE');
         $consulta->execute([$id]);
         $fila = $consulta->fetch();
 
         return $fila === false ? null : Insumo::desdeFila($fila);
     }
 
-    // Guarda el stock y el estado que calculó la clase Insumo.
-    private function guardarStock(Insumo $insumo): void
+    private function lotesDeInsumos(): Lotes
     {
-        $consulta = $this->db->prepare('UPDATE insumo SET stock = ?, estado = ? WHERE id = ?');
-        $consulta->execute([$insumo->stock, $insumo->estado(), $insumo->id]);
-    }
-
-    // Movimiento de un insumo: solo insumo_id (producto_id queda en NULL; la base exige uno de los dos).
-    // Se llama siempre dentro de una transacción.
-    private function registrarMovimiento(int $insumoId, string $tipo, string $motivo, int $cantidad, int $usuarioId): void
-    {
-        $consulta = $this->db->prepare(
-            'INSERT INTO movimiento_inventario (insumo_id, tipo, cantidad, motivo, usuario_id)
-             VALUES (?, ?, ?, ?, ?)'
-        );
-        $consulta->execute([$insumoId, $tipo, $cantidad, $motivo, $usuarioId]);
+        return Lotes::deInsumos($this->db);
     }
 }

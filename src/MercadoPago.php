@@ -42,7 +42,8 @@ class MercadoPago
         [$codigo, $datos] = self::pedir('POST', '/checkout/preferences', [
             'items' => array_map(fn (array $item) => [
                 'id' => (string) $item['producto_id'],
-                'title' => $item['nombre'],
+                // Un producto llevado en parte con descuento tiene dos líneas (028).
+                'title' => $item['nombre'] . (($item['en_promocion'] ?? false) ? ' (con descuento)' : ''),
                 'quantity' => (int) $item['cantidad'],
                 'unit_price' => (float) $item['precio_unitario'],
                 'currency_id' => 'ARS',

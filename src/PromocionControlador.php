@@ -13,7 +13,8 @@ class PromocionControlador
         Response::json(['datos' => self::repositorio()->vigentes()]);
     }
 
-    // POST /api/inventario/promociones (veterinaria, con CSRF): {producto_id, porcentaje, hasta}.
+    // POST /api/inventario/promociones (veterinaria, con CSRF): {producto_id, lote_id, porcentaje, hasta}.
+    // Sin lote_id, la promoción es del lote con stock que vence primero (migración 028).
     public static function crear(): void
     {
         $sesion = Auth::requerirRol(['VETERINARIO']);
@@ -33,14 +34,33 @@ class PromocionControlador
             return;
         }
 
+        // El lote: el elegido (tiene que ser del producto, con stock y sin vencer) o el que vence primero.
+        $lotes = new Lotes(Database::conectar());
+        if (($datos['lote_id'] ?? null) !== null) {
+            $loteId = self::id($datos['lote_id']);
+            $lote = $loteId === null ? null : $lotes->buscar($productoId, $loteId);
+            if ($lote === null) {
+                Response::json(['error' => 'Datos inválidos', 'campos' => ['lote_id' => 'Ese lote no es de este producto']], 400);
+                return;
+            }
+        } else {
+            $lote = $lotes->primeroVendible($productoId);
+        }
+        if ($lote === null || $lote['stock'] === 0 || $lote['vencido']) {
+            Response::json(['error' => $lote !== null && $lote['vencido']
+                ? 'Ese lote está vencido: no se puede vender'
+                : 'Ese lote no tiene unidades: la promoción no tendría nada para vender'], 409);
+            return;
+        }
+
         $hoy = new DateTimeImmutable('now', new DateTimeZone('America/Argentina/Buenos_Aires'));
-        [$limpios, $errores] = Promocion::validar($datos, $hoy, $producto['vencimiento']);
+        [$limpios, $errores] = Promocion::validar($datos, $hoy, $lote['vencimiento']);
         if ($errores !== []) {
             Response::json(['error' => 'Datos inválidos', 'campos' => $errores], 400);
             return;
         }
 
-        $resultado = $promociones->crear($productoId, $limpios['porcentaje'], $limpios['hasta'], (int) $sesion['id']);
+        $resultado = $promociones->crear($productoId, $lote['id'], $limpios['porcentaje'], $limpios['hasta'], (int) $sesion['id']);
         if (is_array($resultado)) {
             $vigente = $resultado[1];
             Response::json([
@@ -51,7 +71,7 @@ class PromocionControlador
             return;
         }
 
-        Logger::info("Promoción $resultado publicada: producto $productoId, {$limpios['porcentaje']} % hasta {$limpios['hasta']} (usuario {$sesion['id']})");
+        Logger::info("Promoción $resultado publicada: producto $productoId, lote {$lote['id']}, {$limpios['porcentaje']} % hasta {$limpios['hasta']} (usuario {$sesion['id']})");
         Response::json($promociones->buscar($resultado), 201);
     }
 
