@@ -23,7 +23,7 @@ class PromocionRepositorio
         $consulta = $this->db->query(
             "SELECT pr.id, pr.producto_id, p.nombre, p.precio, " . Promocion::PRECIO_FINAL . " AS precio_promocion,
                     pr.porcentaje, DATE_FORMAT(pr.hasta, '%Y-%m-%d') AS hasta, p.stock,
-                    lp.id AS lote_id, lp.codigo AS lote_codigo, DATE_FORMAT(lp.vencimiento, '%Y-%m-%d') AS vencimiento,
+                    lp.id AS lote_id, lp.numero AS lote_numero, lp.codigo AS lote_codigo, DATE_FORMAT(lp.vencimiento, '%Y-%m-%d') AS vencimiento,
                     COALESCE(lp.stock, 0) AS quedan,
                     DATE_FORMAT(pr.creada_en, '%Y-%m-%d %H:%i:%s') AS creada_en, u.nombre AS creada_por,
                     (" . self::A_LA_VENTA . " AND COALESCE(lp.stock, 0) > 0) AS a_la_venta
@@ -142,6 +142,9 @@ class PromocionRepositorio
             // El lote de la promoción (028) y cuántas unidades le quedan con descuento.
             'lote' => $fila['lote_id'] === null ? null : [
                 'id' => (int) $fila['lote_id'],
+                // L1, L2… (029) y el número del fabricante.
+                'numero' => $fila['lote_numero'] === null ? null : (int) $fila['lote_numero'],
+                'nombre' => Lotes::nombre($fila['lote_numero'] === null ? null : (int) $fila['lote_numero'], $fila['lote_codigo']),
                 'codigo' => $fila['lote_codigo'],
                 'vencimiento' => $fila['vencimiento'],
             ],

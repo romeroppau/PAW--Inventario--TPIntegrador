@@ -33,7 +33,7 @@ class LotesTest extends TestCase
 
         [, $errores] = Lotes::validarNuevo(['codigo' => str_repeat('x', 41), 'vencimiento' => '2026-11-25'], '2026-11-26');
         $this->assertSame([
-            'codigo' => 'El número de lote puede tener hasta 40 caracteres',
+            'codigo' => 'El número de lote del fabricante puede tener hasta 40 caracteres',
             'vencimiento' => 'La fecha de vencimiento no puede ser anterior a hoy',
         ], $errores);
 
@@ -41,12 +41,32 @@ class LotesTest extends TestCase
         $this->assertSame(['vencimiento' => 'La fecha de vencimiento no es válida'], $errores);
     }
 
+    // "vence" (029): si vence, el lote lleva fecha; si no, no la lleva. Con null no se controla.
+    public function testElLoteNuevoSigueLaReglaDeVence(): void
+    {
+        [, $errores] = Lotes::validarNuevo(['vencimiento' => null], '2026-11-26', true);
+        $this->assertSame(['vencimiento' => 'Este producto vence: poné la fecha de vencimiento del lote'], $errores);
+        [, $errores] = Lotes::validarNuevo(['vencimiento' => '2027-01-01'], '2026-11-26', false, 'insumo');
+        $this->assertSame(['vencimiento' => 'Este insumo no vence: dejá el vencimiento vacío'], $errores);
+        $this->assertSame([['codigo' => null, 'vencimiento' => null], []], Lotes::validarNuevo([], '2026-11-26', false));
+        $this->assertSame([['codigo' => null, 'vencimiento' => '2027-01-01'], []],
+            Lotes::validarNuevo(['vencimiento' => '2027-01-01'], '2026-11-26', true));
+    }
+
+    public function testVenceEsObligatorioEnElAltaYSiVieneEsUnBooleano(): void
+    {
+        $this->assertSame([null, 'Indicá si vence o no'], Lotes::validarVence([], true));
+        $this->assertSame([null, null], Lotes::validarVence([], false), 'en la edición, si no viene no se cambia');
+        $this->assertSame([false, null], Lotes::validarVence(['vence' => false], true));
+        $this->assertSame([null, 'Indicá si vence o no'], Lotes::validarVence(['vence' => 'si'], false));
+    }
+
+    // L1, L2, L3… y, si tiene, el número del fabricante.
     public function testComoSeNombraUnLote(): void
     {
-        $this->assertSame('lote L-0425 (vence el 16/12/2026)', Lotes::texto('L-0425', '2026-12-16'));
-        $this->assertSame('lote que vence el 16/12/2026', Lotes::texto(null, '2026-12-16'));
-        $this->assertSame('lote L-7 (no vence)', Lotes::texto('L-7', null));
-        $this->assertSame('lote sin vencimiento', Lotes::texto(null, null));
+        $this->assertSame('L3', Lotes::nombre(3, null));
+        $this->assertSame('L3', Lotes::nombre(3, ''));
+        $this->assertSame('L1 (FL-2612)', Lotes::nombre(1, 'FL-2612'));
     }
 
     // Los movimientos de un lote que no es el primero siguen enlazando a su consulta o compra.

@@ -8,12 +8,35 @@ class InsumoValidadorTest extends TestCase
 {
     public function testUnAltaValidaNoTieneErrores(): void
     {
-        [$limpios, $errores] = InsumoValidador::alta(['nombre' => '  Gasa estéril  ', 'costo' => 180.5, 'stock' => 100]);
+        [$limpios, $errores] = InsumoValidador::alta(['nombre' => '  Gasa estéril  ', 'costo' => 180.5, 'stock' => 100,
+            'vence' => true, 'vencimiento' => '2099-01-31', 'lote' => ' GA-11 ']);
 
         $this->assertSame([], $errores);
         $this->assertSame('Gasa estéril', $limpios['nombre']);   // sin los espacios de los costados
         $this->assertSame(180.5, $limpios['costo']);
         $this->assertSame(100, $limpios['stock']);
+        $this->assertSame([true, '2099-01-31', 'GA-11'], [$limpios['vence'], $limpios['vencimiento'], $limpios['lote']]);
+    }
+
+    // Migración 029: "vence" es obligatorio en el alta. Si vence y tiene stock inicial, el primer
+    // lote lleva su vencimiento; si no vence, no lo lleva. En la edición, "vence" es opcional.
+    public function testElAltaSigueLaReglaDeVence(): void
+    {
+        [, $errores] = InsumoValidador::alta(['nombre' => 'Gasa', 'costo' => 1, 'stock' => 5]);
+        $this->assertSame(['vence' => 'Indicá si vence o no'], $errores);
+
+        [, $errores] = InsumoValidador::alta(['nombre' => 'Gasa', 'costo' => 1, 'stock' => 5, 'vence' => true]);
+        $this->assertSame(['vencimiento' => 'Este insumo vence: poné la fecha de vencimiento del lote'], $errores);
+
+        [, $errores] = InsumoValidador::alta(['nombre' => 'Gasa', 'costo' => 1, 'stock' => 0, 'vence' => true]);
+        $this->assertSame([], $errores, 'sin stock inicial todavía no hay lote');
+
+        [, $errores] = InsumoValidador::alta(['nombre' => 'Guantes', 'costo' => 1, 'stock' => 5, 'vence' => false, 'vencimiento' => '2099-01-01']);
+        $this->assertSame(['vencimiento' => 'Este insumo no vence: dejá el vencimiento vacío'], $errores);
+
+        [$limpios, $errores] = InsumoValidador::edicion(['nombre' => 'Guantes', 'costo' => 1]);
+        $this->assertSame([], $errores);
+        $this->assertArrayNotHasKey('vence', $limpios);
     }
 
     public function testSiFaltanLosCamposDiceQueSonObligatorios(): void

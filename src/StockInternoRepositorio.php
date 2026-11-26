@@ -42,24 +42,19 @@ class StockInternoRepositorio
 
                 // INSERT IGNORE no sirve: ocultaría otros errores. Usamos try/catch por ítem
                 // con un SAVEPOINT para no abortar la transacción entera.
-                // Un producto (migración 028) primero sale de sus lotes y después registra un
-                // movimiento por lote: si el id_operacion ya se usó, el ROLLBACK TO SAVEPOINT
-                // devuelve también el stock de los lotes. $descontado: null si falta descontar.
-                // Un reintento de un producto se reconoce antes de tocar los lotes (si no, sin stock
-                // daría "insuficiente" en lugar de "ya aplicado").
-                if ($item['tipo'] === 'PRODUCTO' && $this->operacionUsada($item['id_operacion'])) {
+                // Un producto (migración 028) o un insumo (029) primero sale de sus lotes y después
+                // registra un movimiento por lote: si el id_operacion ya se usó, el ROLLBACK TO
+                // SAVEPOINT devuelve también el stock de los lotes.
+                // Un reintento se reconoce antes de tocar los lotes (si no, sin stock daría
+                // "insuficiente" en lugar de "ya aplicado").
+                if ($this->operacionUsada($item['id_operacion'])) {
                     $this->anotarReintento($item, $distintas);
                     continue;
                 }
 
                 $this->db->exec('SAVEPOINT item');
-                $descontado = null;
                 try {
-                    if ($item['tipo'] === 'PRODUCTO') {
-                        $descontado = $this->descontarProducto($usuarioId, $item);
-                    } else {
-                        $this->insertarMovimiento($usuarioId, $item);
-                    }
+                    $descontado = $this->descontarDeLotes($usuarioId, $item);
                 } catch (PDOException $e) {
                     if ((int) ($e->errorInfo[1] ?? 0) === 1062) {
                         $this->db->exec('ROLLBACK TO SAVEPOINT item');
@@ -69,7 +64,7 @@ class StockInternoRepositorio
                     throw $e;
                 }
 
-                if (!($descontado ?? $this->descontarItem($item))) {
+                if (!$descontado) {
                     // Puede haber cambiado desde la lectura de arriba: se vuelve a leer.
                     $actual = $this->estadoActual($item);
                     if (!$actual['activo']) {
@@ -132,72 +127,37 @@ class StockInternoRepositorio
         return (int) $stmt->fetchColumn() > 0;
     }
 
-    // Descuenta un insumo (el movimiento ya se insertó).
-    private function descontarItem(array $item): bool
+    // Los lotes del producto o del insumo del ítem.
+    private function lotes(array $item): Lotes
     {
-        if ($item['tipo'] === 'INSUMO') {
-            // MySQL aplica el SET de izquierda a derecha: el IF ya ve el stock nuevo.
-            // Si el veterinario lo marcó "Ya pedido", queda así hasta que cargue el stock.
-            $sql = "UPDATE insumo
-                    SET stock = stock - ?,
-                        estado = IF(estado = 'YA_PEDIDO', 'YA_PEDIDO', IF(stock = 0, 'EN_FALTA', 'DISPONIBLE'))
-                    WHERE id = ? AND activo = 1 AND stock >= ?";
-        } else {
-            $sql = "UPDATE producto SET stock = stock - ? WHERE id = ? AND activo = 1 AND stock >= ?";
-        }
-
-        $stmt = $this->db->prepare($sql);
-        $stmt->execute([$item['cantidad'], $item['id'], $item['cantidad']]);
-        return $stmt->rowCount() === 1;
+        return $item['tipo'] === 'INSUMO' ? Lotes::deInsumos($this->db) : new Lotes($this->db);
     }
 
-    // Un producto sale de sus lotes sin vencer, el que vence primero antes (migración 028), y registra
-    // un movimiento por lote: el primero con el id_operacion del pedido y los demás con
-    // "{id_operacion}-lote-{lote}". Los movimientos no se modifican (el usuario inventario solo
+    // Un producto (migración 028) o un insumo (029) sale de sus lotes sin vencer, el que vence primero
+    // antes, y registra un movimiento por lote: el primero con el id_operacion del pedido y los demás
+    // con "{id_operacion}-lote-{lote}". Los movimientos no se modifican (el usuario inventario solo
     // tiene SELECT e INSERT): por eso se insertan después de saber de qué lotes sale.
     // false si está dado de baja o no alcanza (y no descuenta nada).
-    private function descontarProducto(int $usuarioId, array $item): bool
+    private function descontarDeLotes(int $usuarioId, array $item): bool
     {
-        $consulta = $this->db->prepare('SELECT activo FROM producto WHERE id = ? FOR UPDATE');
-        $consulta->execute([$item['id']]);
-        if (!(bool) $consulta->fetchColumn()) {
+        $lotes = $this->lotes($item);
+        $actual = $lotes->bloquear($item['id']);
+        if ($actual === null || !$actual['activo']) {
             return false;
         }
 
-        $lotes = new Lotes($this->db);
         $partes = $lotes->sacar($item['id'], $item['cantidad']);
         if ($partes === null) {
             return false;
         }
 
         foreach ($partes as $i => [$loteId, $tomadas]) {
-            $this->db->prepare(
-                "INSERT INTO movimiento_inventario (producto_id, lote_id, tipo, cantidad, motivo, usuario_id, id_operacion)
-                 VALUES (?, ?, 'SALIDA', ?, 'CONSULTA', ?, ?)"
-            )->execute([$item['id'], $loteId, $tomadas, $usuarioId, $i === 0 ? $item['id_operacion'] : "{$item['id_operacion']}-lote-$loteId"]);
+            $lotes->movimiento($item['id'], $loteId, 'SALIDA', 'CONSULTA', $tomadas, $usuarioId,
+                $i === 0 ? $item['id_operacion'] : "{$item['id_operacion']}-lote-$loteId");
         }
         $lotes->sincronizar($item['id']);
 
         return true;
-    }
-
-    private function insertarMovimiento(int $usuarioId, array $item): void
-    {
-        $esInsumo = $item['tipo'] === 'INSUMO';
-
-        // Exactamente uno de los dos ids (regla de la migración 003)
-        $stmt = $this->db->prepare(
-            "INSERT INTO movimiento_inventario
-                (producto_id, insumo_id, tipo, cantidad, motivo, usuario_id, id_operacion)
-             VALUES (?, ?, 'SALIDA', ?, 'CONSULTA', ?, ?)"
-        );
-        $stmt->execute([
-            $esInsumo ? null : $item['id'],
-            $esInsumo ? $item['id'] : null,
-            $item['cantidad'],
-            $usuarioId,
-            $item['id_operacion'],
-        ]);
     }
 
     // La cantidad que ya se descontó con este id_operacion, si fue para el mismo ítem; si no, 0.
@@ -212,11 +172,8 @@ class StockInternoRepositorio
         if (!$fila || (int) $fila[$columna] !== $item['id']) {
             return 0;
         }
-        if ($item['tipo'] === 'INSUMO') {
-            return (int) $fila['cantidad'];
-        }
 
-        // Un producto pudo salir de varios lotes (028): se suman sus movimientos.
+        // Pudo salir de varios lotes (028 y 029): se suman sus movimientos.
         $stmt = $this->db->prepare('SELECT SUM(cantidad) FROM movimiento_inventario WHERE id_operacion = ? OR id_operacion LIKE ?');
         $stmt->execute([$item['id_operacion'], $item['id_operacion'] . '-lote-%']);
 
@@ -234,8 +191,8 @@ class StockInternoRepositorio
         if (!$fila) {
             return null;
         }
-        // De un producto se informa lo que se puede usar: sin los lotes vencidos (028).
-        $stock = $item['tipo'] === 'PRODUCTO' ? (new Lotes($this->db))->stockVendible($item['id']) : (int) $fila['stock'];
+        // Se informa lo que se puede usar: sin los lotes vencidos (028 y 029).
+        $stock = $this->lotes($item)->stockVendible($item['id']);
 
         return ['stock' => $stock, 'activo' => (bool) $fila['activo']];
     }

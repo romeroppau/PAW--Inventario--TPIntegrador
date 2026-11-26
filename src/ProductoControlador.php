@@ -118,12 +118,17 @@ class ProductoControlador
         $id = self::id($parametros);
 
         // Primero se comprueba que exista: si no, 404 aunque los datos también sean inválidos.
-        if ($id === null || !$productos->existe($id)) {
+        $actual = $id === null ? null : $productos->vence($id);
+        if ($actual === null) {
             Response::json(['error' => self::NO_ENCONTRADO], 404);
             return;
         }
 
         [$limpios, $errores] = ValidadorProducto::edicion(Request::json());
+        // Si vence o no (029) se cambia solo sin stock: si no, sus lotes no seguirían la regla.
+        if (isset($limpios['vence']) && $limpios['vence'] !== $actual['vence'] && $actual['stock'] > 0) {
+            $errores['vence'] = self::cambioDeVence($actual['stock']);
+        }
 
         if ($errores !== []) {
             Response::json(['error' => 'Datos inválidos', 'campos' => $errores], 400);
@@ -175,15 +180,17 @@ class ProductoControlador
     }
 
     // POST /api/inventario/productos/{id}/stock — {cantidad, lote_id} (un lote que ya existe),
-    // {cantidad, lote: {codigo, vencimiento}} (un lote nuevo) o {cantidad} (el lote sin vencimiento).
+    // {cantidad, lote: {codigo, vencimiento}} (un lote nuevo, el número que sigue) o {cantidad} (el
+    // lote sin vencimiento, solo si el producto no vence).
     public static function cargarStock(array $parametros): void
     {
         $sesion = self::veterinario(true);
 
         $productos = self::repositorio();
         $id = self::id($parametros);
+        $actual = $id === null ? null : $productos->vence($id);
 
-        if ($id === null || !$productos->existe($id)) {
+        if ($actual === null) {
             Response::json(['error' => self::NO_ENCONTRADO], 404);
             return;
         }
@@ -203,7 +210,7 @@ class ProductoControlador
                 $errores['lote_id'] = 'Elegí un lote del producto';
             }
         } elseif (($datos['lote'] ?? null) !== null) {
-            [$nuevo, $erroresLote] = Lotes::validarNuevo($datos['lote'], date('Y-m-d'));
+            [$nuevo, $erroresLote] = Lotes::validarNuevo($datos['lote'], date('Y-m-d'), $actual['vence']);
             foreach ($erroresLote as $campo => $mensaje) {
                 $errores["lote.$campo"] = $mensaje;
             }
@@ -220,15 +227,16 @@ class ProductoControlador
             Response::json(['error' => 'El producto está dado de baja'], 409);
             return;
         }
-        if ($resultado === 'lote_inexistente') {
-            Response::json(['error' => 'Datos inválidos', 'campos' => ['lote_id' => 'Ese lote no es de este producto']], 400);
+        if (is_string($resultado)) {
+            Response::json(['error' => 'Datos inválidos', 'campos' => ['lote_id' => self::errorDeLote($resultado, 'producto')]], 400);
             return;
         }
 
         Response::json(['id' => $id, 'stock' => $resultado['stock'], 'lote' => $resultado['lote']]);
     }
 
-    // PUT /api/inventario/productos/{id}/lotes/{lote} — {codigo, vencimiento}: corrige un lote mal cargado.
+    // PUT /api/inventario/productos/{id}/lotes/{lote} — {codigo, vencimiento}: corrige un lote mal
+    // cargado (el número L1, L2… no cambia).
     public static function editarLote(array $parametros): void
     {
         self::veterinario(true);
@@ -236,14 +244,16 @@ class ProductoControlador
         $productos = self::repositorio();
         $id = self::id($parametros);
         $loteId = self::id(['id' => $parametros['lote'] ?? '']);
+        $actual = $id === null ? null : $productos->vence($id);
 
-        if ($id === null || $loteId === null || !$productos->existe($id)) {
+        if ($actual === null || $loteId === null) {
             Response::json(['error' => self::NO_ENCONTRADO], 404);
             return;
         }
 
-        // Se puede corregir a una fecha pasada (un lote que ya venció y se cargó con otra fecha).
-        [$limpios, $errores] = Lotes::validarNuevo(Request::json(), '0000-00-00');
+        // Se puede corregir a una fecha pasada (un lote que ya venció y se cargó con otra fecha). Si el
+        // producto vence, la fecha es obligatoria; si no vence, no lleva (029).
+        [$limpios, $errores] = Lotes::validarNuevo(Request::json(), '0000-00-00', $actual['vence']);
         if ($errores !== []) {
             Response::json(['error' => 'Datos inválidos', 'campos' => $errores], 400);
             return;
@@ -298,8 +308,8 @@ class ProductoControlador
             Response::json(['error' => 'El producto está dado de baja'], 409);
             return;
         }
-        if ($stock === 'lote_inexistente') {
-            Response::json(['error' => 'Datos inválidos', 'campos' => ['lote_id' => 'Ese lote no es de este producto']], 400);
+        if (is_string($stock)) {
+            Response::json(['error' => 'Datos inválidos', 'campos' => ['lote_id' => self::errorDeLote($stock, 'producto')]], 400);
             return;
         }
         if (is_array($stock)) {
@@ -360,6 +370,27 @@ class ProductoControlador
     }
 
     // ---------- Ayudas ----------
+
+    // El mensaje de "vence" cuando se quiere cambiar con stock (lo usa también InsumoControlador:
+    // un insumo no se vende, se usa).
+    public static function cambioDeVence(int $stock, string $que = 'producto'): string
+    {
+        $salida = $que === 'insumo' ? 'usá' : 'vendé';
+
+        return "Se puede cambiar solo sin stock: retirá o $salida las $stock unidades primero";
+    }
+
+    // El mensaje de cada motivo por el que no se carga o retira de un lote (Lotes::paraCargar).
+    // $que: "producto" o "insumo" (lo usa también InsumoControlador).
+    public static function errorDeLote(string $motivo, string $que): string
+    {
+        return match ($motivo) {
+            'lote_vencido' => 'Ese lote está vencido: cargá en otro o creá uno nuevo',
+            'lote_no_corresponde' => "Ese lote no sigue la regla del $que (si vence, cada lote lleva su vencimiento): cargá en otro o creá uno nuevo",
+            'falta_lote' => "Este $que vence: elegí un lote o creá uno nuevo con su vencimiento",
+            default => "Ese lote no es de este $que",
+        };
+    }
 
     // Exige sesión de veterinario (401 o 403 si no) y, para POST, PUT y DELETE, el token CSRF (403).
     // Auth (de comun/) ya responde y corta si algo falla. Devuelve los datos del JWT (id, rol, csrf).

@@ -15,10 +15,13 @@ class InsumoControlador
     {
         self::veterinario();
 
-        $insumos = self::repositorio()->listarTodos();
+        $repositorio = self::repositorio();
+        $insumos = $repositorio->listarTodos();
+        $lotes = $repositorio->lotes();
 
         Response::json([
-            'datos' => array_map(fn (Insumo $insumo) => $insumo->aJson(), $insumos),
+            // Cada uno con sus lotes (029).
+            'datos' => array_map(fn (Insumo $insumo) => $insumo->aJson() + ['lotes' => $lotes[$insumo->id] ?? []], $insumos),
             // Para el filtro "solo stock bajo" y el texto del listado (Entrega 5).
             'limite_stock_bajo' => Insumo::limiteStockBajo(),
         ]);
@@ -29,12 +32,13 @@ class InsumoControlador
     {
         self::veterinario();
 
-        $insumo = self::buscar(self::repositorio(), $parametros);
+        $repositorio = self::repositorio();
+        $insumo = self::buscar($repositorio, $parametros);
         if ($insumo === null) {
             return;
         }
 
-        Response::json($insumo->aJson());
+        Response::json(self::conLotes($repositorio, $insumo));
     }
 
     // POST /api/inventario/insumos
@@ -52,7 +56,7 @@ class InsumoControlador
         $insumos = self::repositorio();
         $id = $insumos->insertar($limpios, (int) $sesion['id']);
 
-        Response::json($insumos->buscarPorId($id)->aJson(), 201);
+        Response::json(self::conLotes($insumos, $insumos->buscarPorId($id)), 201);
     }
 
     // PUT /api/inventario/insumos/{id}
@@ -69,6 +73,10 @@ class InsumoControlador
         }
 
         [$limpios, $errores] = InsumoValidador::edicion(Request::json());
+        // Si vence o no (029) se cambia solo sin stock: si no, sus lotes no seguirían la regla.
+        if (isset($limpios['vence']) && $limpios['vence'] !== $insumo->vence && $insumo->stock > 0) {
+            $errores['vence'] = ProductoControlador::cambioDeVence($insumo->stock, 'insumo');
+        }
 
         if ($errores !== []) {
             Response::json(['error' => 'Datos inválidos', 'campos' => $errores], 400);
@@ -77,7 +85,7 @@ class InsumoControlador
 
         $insumos->actualizar($insumo->id, $limpios);
 
-        Response::json($insumos->buscarPorId($insumo->id)->aJson());
+        Response::json(self::conLotes($insumos, $insumos->buscarPorId($insumo->id)));
     }
 
     // DELETE /api/inventario/insumos/{id}
@@ -128,7 +136,9 @@ class InsumoControlador
         self::cambiarPedido($parametros, false);
     }
 
-    // POST /api/inventario/insumos/{id}/stock
+    // POST /api/inventario/insumos/{id}/stock — {cantidad, lote_id} (un lote que ya existe),
+    // {cantidad, lote: {codigo, vencimiento}} (un lote nuevo, el número que sigue) o {cantidad} (el
+    // lote sin vencimiento, solo si el insumo no vence). Igual que en productos (029).
     public static function cargarStock(array $parametros): void
     {
         $sesion = self::veterinario(true);
@@ -140,20 +150,74 @@ class InsumoControlador
             return;
         }
 
-        $cantidad = self::cantidad();
-        if ($cantidad === null) {
+        $datos = Request::json();
+        $errores = [];
+        if (InsumoValidador::cantidad($datos['cantidad'] ?? null) === null) {
+            $errores['cantidad'] = self::ERROR_CANTIDAD;
+        }
+        $loteId = null;
+        $nuevo = null;
+        if (($datos['lote_id'] ?? null) !== null) {
+            $loteId = self::id(['id' => is_int($datos['lote_id']) ? (string) $datos['lote_id'] : $datos['lote_id']]);
+            if ($loteId === null) {
+                $errores['lote_id'] = 'Elegí un lote del insumo';
+            }
+        } elseif (($datos['lote'] ?? null) !== null) {
+            [$nuevo, $erroresLote] = Lotes::validarNuevo($datos['lote'], date('Y-m-d'), $insumo->vence, 'insumo');
+            foreach ($erroresLote as $campo => $mensaje) {
+                $errores["lote.$campo"] = $mensaje;
+            }
+        }
+        if ($errores !== []) {
+            Response::json(['error' => 'Datos inválidos', 'campos' => $errores], 400);
             return;
         }
 
-        $actualizado = $insumos->cargarStock($insumo->id, $cantidad, (int) $sesion['id']);
+        $resultado = $insumos->cargarStock($insumo->id, $datos['cantidad'], (int) $sesion['id'], $loteId, $nuevo);
 
-        // El insumo existe (se comprobó arriba), así que si no se pudo cargar es porque está dado de baja.
-        if ($actualizado === null) {
+        // El insumo existe (se comprobó arriba): 'baja' es que está dado de baja.
+        if ($resultado === 'baja') {
             Response::json(['error' => self::DADO_DE_BAJA], 409);
             return;
         }
+        if (is_string($resultado)) {
+            Response::json(['error' => 'Datos inválidos', 'campos' => ['lote_id' => ProductoControlador::errorDeLote($resultado, 'insumo')]], 400);
+            return;
+        }
 
-        Response::json(self::stock($actualizado));
+        Response::json(self::stock($resultado[0]) + ['lote' => $resultado[1]]);
+    }
+
+    // PUT /api/inventario/insumos/{id}/lotes/{lote} — {codigo, vencimiento}: corrige un lote mal
+    // cargado (el número L1, L2… no cambia). Igual que en productos.
+    public static function editarLote(array $parametros): void
+    {
+        self::veterinario(true);
+
+        $insumos = self::repositorio();
+        $insumo = self::buscar($insumos, $parametros);
+        if ($insumo === null) {
+            return;
+        }
+        $loteId = self::id(['id' => $parametros['lote'] ?? '']);
+        if ($loteId === null) {
+            Response::json(['error' => 'Ese lote no es de este insumo'], 404);
+            return;
+        }
+
+        // Se puede corregir a una fecha pasada (un lote que ya venció y se cargó con otra fecha).
+        [$limpios, $errores] = Lotes::validarNuevo(Request::json(), '0000-00-00', $insumo->vence, 'insumo');
+        if ($errores !== []) {
+            Response::json(['error' => 'Datos inválidos', 'campos' => $errores], 400);
+            return;
+        }
+
+        if (!$insumos->editarLote($insumo->id, $loteId, $limpios)) {
+            Response::json(['error' => 'Ese lote no es de este insumo'], 404);
+            return;
+        }
+
+        Response::json(self::conLotes($insumos, $insumos->buscarPorId($insumo->id)));
     }
 
     // POST /api/inventario/insumos/{id}/retiro
@@ -173,17 +237,29 @@ class InsumoControlador
             return;
         }
 
-        $actualizado = $insumos->retirarStock($insumo->id, $cantidad, (int) $sesion['id']);
-
-        // Si no se pudo, se vuelve a leer para saber por qué: dado de baja o stock insuficiente.
-        if ($actualizado === null) {
-            $insumo = $insumos->buscarPorId($insumo->id);
-
-            if (!$insumo->activo) {
-                Response::json(['error' => self::DADO_DE_BAJA], 409);
-            } else {
-                Response::json(['error' => 'Stock insuficiente', 'stock' => $insumo->stock], 409);
+        // De qué lote (029). Sin lote: de los que vencen primero (los vencidos antes que nada).
+        $datos = Request::json();
+        $loteId = null;
+        if (($datos['lote_id'] ?? null) !== null) {
+            $loteId = self::id(['id' => is_int($datos['lote_id']) ? (string) $datos['lote_id'] : $datos['lote_id']]);
+            if ($loteId === null) {
+                Response::json(['error' => 'Datos inválidos', 'campos' => ['lote_id' => 'Elegí un lote del insumo']], 400);
+                return;
             }
+        }
+
+        $actualizado = $insumos->retirarStock($insumo->id, $cantidad, (int) $sesion['id'], $loteId);
+
+        if ($actualizado === 'baja') {
+            Response::json(['error' => self::DADO_DE_BAJA], 409);
+            return;
+        }
+        if (is_string($actualizado)) {
+            Response::json(['error' => 'Datos inválidos', 'campos' => ['lote_id' => 'Ese lote no es de este insumo']], 400);
+            return;
+        }
+        if (is_array($actualizado)) {
+            Response::json(['error' => 'Stock insuficiente', 'stock' => $actualizado[1]], 409);
             return;
         }
 
@@ -297,8 +373,16 @@ class InsumoControlador
             'id' => $insumo->id,
             'stock' => $insumo->stock,
             'estado' => $insumo->estado(),
-            'stock_bajo' => $insumo->stockBajo()
+            'stock_bajo' => $insumo->stockBajo(),
+            'stock_sin_vencer' => $insumo->sinVencer(),
+            'vencimiento' => $insumo->vencimiento,
         ];
+    }
+
+    // El insumo del contrato con sus lotes (029).
+    private static function conLotes(InsumoRepositorio $insumos, Insumo $insumo): array
+    {
+        return $insumo->aJson() + ['lotes' => $insumos->lotes($insumo->id)[$insumo->id] ?? []];
     }
 
     // El {id} de la ruta como entero positivo, o null si no lo es (y entonces se responde 404).

@@ -17,7 +17,8 @@ class ValidadorProducto
         return self::validar($datos, true);
     }
 
-    // Edición: sin stock ni vencimiento (se ignoran si llegan: son de los lotes).
+    // Edición: sin stock ni vencimiento (se ignoran si llegan: son de los lotes). "vence" es opcional:
+    // si no viene, no se cambia.
     public static function edicion(array $datos): array
     {
         return self::validar($datos, false);
@@ -104,13 +105,25 @@ class ValidadorProducto
             }
         }
 
+        // vence (migración 029): obligatorio en el alta (true o false); en la edición, si no viene, no
+        // se cambia (ProductoControlador controla que el stock esté en 0).
+        [$vence, $errorVence] = Lotes::validarVence($datos, $esAlta);
+        if ($errorVence !== null) {
+            $errores['vence'] = $errorVence;
+        } elseif ($vence !== null) {
+            $limpios['vence'] = $vence;
+        }
+
         // Solo en el alta (migración 028: el vencimiento es de cada lote): el primer lote, con su
-        // vencimiento (opcional, AAAA-MM-DD, de hoy en adelante) y su número ("lote", opcional).
+        // vencimiento (AAAA-MM-DD, de hoy en adelante) y el número del fabricante ("lote", opcional).
+        // Si vence y tiene stock inicial, el vencimiento es obligatorio; si no vence, no lleva.
         // En la edición se ignoran: los lotes se cargan y se corrigen aparte.
         if ($esAlta) {
+            $conStock = is_int($datos['stock'] ?? null) && $datos['stock'] > 0;
             [$lote, $erroresLote] = Lotes::validarNuevo(
                 ['codigo' => $datos['lote'] ?? null, 'vencimiento' => $datos['vencimiento'] ?? null],
-                date('Y-m-d')
+                date('Y-m-d'),
+                $vence === false ? false : ($vence === true && $conStock ? true : null)
             );
             if (isset($erroresLote['codigo'])) {
                 $errores['lote'] = $erroresLote['codigo'];
