@@ -10,6 +10,10 @@ class Insumo
     // por defecto: la veterinaria lo cambia en Configuración (limite_stock_bajo, Entrega 5).
     public const LIMITE_STOCK_BAJO = 10;
 
+    // Qué aplicación del calendario sanitario puede ser un insumo (migración 025): la consulta de una
+    // vacuna o desparasitación tiene que llevar un insumo de esa aplicación.
+    public const APLICACIONES = ['SEXTUPLE', 'TRIPLE_FELINA', 'ANTIRRABICA', 'TOS_PERRERAS', 'LEUCEMIA_FELINA', 'ANTIPARASITARIO'];
+
     // El límite de stock bajo configurado (el mismo para insumos y productos), o 10 si no hay.
     public static function limiteStockBajo(): int
     {
@@ -25,7 +29,9 @@ class Insumo
         public float $costo,
         public bool $activo,
         // true si el veterinario lo marcó "Ya pedido" al proveedor. Se borra al cargar stock.
-        public bool $pedido = false
+        public bool $pedido = false,
+        // La aplicación del calendario (APLICACIONES), o null si no es una vacuna ni un antiparasitario.
+        public ?string $aplicacion = null
     ) {
     }
 
@@ -38,7 +44,8 @@ class Insumo
             (int) $fila['stock'],
             (float) $fila['costo'],
             (bool) $fila['activo'],
-            ($fila['estado'] ?? '') === 'YA_PEDIDO'
+            ($fila['estado'] ?? '') === 'YA_PEDIDO',
+            $fila['aplicacion'] ?? null
         );
     }
 
@@ -97,6 +104,7 @@ class Insumo
         return [
             'id' => $this->id,
             'nombre' => $this->nombre,
+            'aplicacion' => $this->aplicacion,
             'stock' => $this->stock,
             'costo' => $this->costo,
             'estado' => $this->estado(),

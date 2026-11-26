@@ -20,6 +20,7 @@ $router->put('/api/inventario/productos/{id}', [ProductoControlador::class, 'edi
 $router->delete('/api/inventario/productos/{id}', [ProductoControlador::class, 'darDeBaja']);
 $router->post('/api/inventario/productos/{id}/reactivar', [ProductoControlador::class, 'reactivar']);
 $router->post('/api/inventario/productos/{id}/stock', [ProductoControlador::class, 'cargarStock']);
+$router->post('/api/inventario/productos/{id}/retiro', [ProductoControlador::class, 'retirarStock']);
 $router->get('/api/inventario/productos/{id}/movimientos', [ProductoControlador::class, 'movimientos']);
 
 // Salud del módulo.

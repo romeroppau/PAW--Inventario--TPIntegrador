@@ -9,7 +9,7 @@
 //   la tabla directo, vea el estado correcto.
 class InsumoRepositorio
 {
-    private const COLUMNAS = 'id, nombre, stock, costo, estado, activo';
+    private const COLUMNAS = 'id, nombre, aplicacion, stock, costo, estado, activo';
 
     // Recibe la conexión de afuera, así las pruebas pueden usar otra base.
     // Hora de Argentina (-03:00) para las fechas de los movimientos, igual que en productos.
@@ -42,15 +42,16 @@ class InsumoRepositorio
     // Las dos cosas van en una transacción: o se guardan las dos, o ninguna.
     public function insertar(array $datos, int $usuarioId): int
     {
-        $nuevo = new Insumo(0, $datos['nombre'], $datos['stock'], $datos['costo'], true);
+        $nuevo = new Insumo(0, $datos['nombre'], $datos['stock'], $datos['costo'], true, false, $datos['aplicacion'] ?? null);
 
         $this->db->beginTransaction();
         try {
             $consulta = $this->db->prepare(
-                'INSERT INTO insumo (nombre, stock, costo, estado) VALUES (?, ?, ?, ?)'
+                'INSERT INTO insumo (nombre, aplicacion, stock, costo, estado) VALUES (?, ?, ?, ?, ?)'
             );
             $consulta->execute([
                 $nuevo->nombre,
+                $nuevo->aplicacion,
                 $nuevo->stock,
                 number_format($nuevo->costo, 2, '.', ''),
                 $nuevo->estado()
@@ -71,9 +72,15 @@ class InsumoRepositorio
         return $id;
     }
 
-    // Edita nombre y costo. Nunca el stock, el estado ni activo.
+    // Edita nombre, costo y (si vino) la aplicación del calendario. Nunca el stock, el estado ni activo.
     public function actualizar(int $id, array $datos): void
     {
+        if (array_key_exists('aplicacion', $datos)) {
+            $consulta = $this->db->prepare('UPDATE insumo SET nombre = ?, costo = ?, aplicacion = ? WHERE id = ?');
+            $consulta->execute([$datos['nombre'], number_format($datos['costo'], 2, '.', ''), $datos['aplicacion'], $id]);
+            return;
+        }
+
         $consulta = $this->db->prepare('UPDATE insumo SET nombre = ?, costo = ? WHERE id = ?');
         $consulta->execute([$datos['nombre'], number_format($datos['costo'], 2, '.', ''), $id]);
     }

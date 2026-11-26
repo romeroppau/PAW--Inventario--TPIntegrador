@@ -69,6 +69,11 @@ Se aplica en el alta (`POST`) y en la edición (`PUT`). Antes de validar se quit
 | `nombre` | Texto de 2 a 120 caracteres | "El nombre es obligatorio" | "El nombre debe tener entre 2 y 120 caracteres" |
 | `costo` | Número de 0 a menos de 100.000.000, con hasta 2 decimales | "El costo es obligatorio" | "El costo debe ser un número mayor o igual a 0 con hasta 2 decimales" |
 | `stock` | Solo en el alta. Entero de 0 a 1.000.000 | "El stock es obligatorio" | "El stock debe ser un número entero entre 0 y 1.000.000" |
+| `aplicacion` | Opcional (migración 025). Qué vacuna o antiparasitario del calendario sanitario es: `SEXTUPLE`, `TRIPLE_FELINA`, `ANTIRRABICA`, `TOS_PERRERAS`, `LEUCEMIA_FELINA` o `ANTIPARASITARIO`. `null` o `""` = no es del calendario. En la edición, si no viene, no se cambia | — | "Elegí una vacuna o antiparasitario de la lista" |
+
+La consulta de una vacuna o desparasitación tiene que llevar un insumo con su `aplicacion` (Pacientes,
+`contrato-consultas.md`). La migración 025 marca los que ya existían por su nombre y crea, con stock 0,
+el de cada aplicación que faltaba.
 
 Si hay errores, se responde `400` con un mensaje por campo:
 
@@ -102,6 +107,7 @@ Listado para el panel del veterinario: **todos** los insumos, incluidos los dado
     {
       "id": 101,
       "nombre": "Jeringa descartable 3 ml",
+      "aplicacion": null,
       "stock": 200,
       "costo": 150.00,
       "estado": "DISPONIBLE",

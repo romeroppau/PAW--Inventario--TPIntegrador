@@ -208,6 +208,46 @@ class ProductoControlador
         Response::json(['id' => $id, 'stock' => $stock]);
     }
 
+    // POST /api/inventario/productos/{id}/retiro
+    // Retiro manual de stock (como en insumos): resta unidades y registra una SALIDA con motivo AJUSTE.
+    public static function retirarStock(array $parametros): void
+    {
+        $sesion = self::veterinario(true);
+
+        $productos = self::repositorio();
+        $id = self::id($parametros);
+
+        if ($id === null || !$productos->existe($id)) {
+            Response::json(['error' => self::NO_ENCONTRADO], 404);
+            return;
+        }
+
+        $cantidad = ValidadorProducto::cantidad(Request::json()['cantidad'] ?? null);
+
+        if ($cantidad === null) {
+            Response::json([
+                'error' => 'Datos inválidos',
+                'campos' => ['cantidad' => 'La cantidad debe ser un número entero entre 1 y 100.000']
+            ], 400);
+            return;
+        }
+
+        $stock = $productos->retirarStock($id, $cantidad, (int) $sesion['id']);
+
+        // Si no se pudo, se vuelve a leer para saber por qué: dado de baja o stock insuficiente.
+        if ($stock === null) {
+            $producto = $productos->buscarPorId($id);
+            if (!$producto['activo']) {
+                Response::json(['error' => 'El producto está dado de baja'], 409);
+            } else {
+                Response::json(['error' => 'Stock insuficiente', 'stock' => $producto['stock']], 409);
+            }
+            return;
+        }
+
+        Response::json(['id' => $id, 'stock' => $stock]);
+    }
+
     // GET /api/inventario/productos/{id}/movimientos
     public static function movimientos(array $parametros): void
     {

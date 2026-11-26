@@ -94,7 +94,7 @@ class CompraTest extends TestCase
         $retirarHasta = $this->fecha('2026-11-23');
 
         $this->assertSame('dia4', Compra::recordatorioDeHoy($confirmada, $retirarHasta, $this->fecha('2026-11-20 10:00:00')));
-        $this->assertStringContainsString('el lunes 23/11 es el último día', Compra::mensajeDia4('Ana Pérez', 'V-000003', $retirarHasta));
+        $this->assertStringContainsString('el lunes 23/11/2026 es el último día', Compra::mensajeDia4('Ana Pérez', 'V-000003', $retirarHasta));
     }
 
     public function testLosMensajesUsanElPrimerNombreYLaFechaLimite(): void
@@ -103,11 +103,11 @@ class CompraTest extends TestCase
 
         $dia2 = Compra::mensajeDia2('Ana Pérez', 'V-000003', $retirarHasta);
         $this->assertStringContainsString('¡Hola, Ana!', $dia2);
-        $this->assertStringContainsString('hasta el miércoles 25/11 inclusive', $dia2);
+        $this->assertStringContainsString('hasta el miércoles 25/11/2026 inclusive', $dia2);
         $this->assertStringContainsString('Política de cancelación', $dia2);
 
-        $this->assertStringContainsString('el miércoles 25/11 es el último día', Compra::mensajeDia4('Ana Pérez', 'V-000003', $retirarHasta));
-        $this->assertStringContainsString('venció el plazo de retiro (25/11)', Compra::mensajeCancelada('Ana Pérez', 'V-000003', $retirarHasta));
+        $this->assertStringContainsString('el miércoles 25/11/2026 es el último día', Compra::mensajeDia4('Ana Pérez', 'V-000003', $retirarHasta));
+        $this->assertStringContainsString('venció el plazo de retiro (25/11/2026)', Compra::mensajeCancelada('Ana Pérez', 'V-000003', $retirarHasta));
 
         // Los mensajes van en un solo renglón (WhatsApp no acepta saltos de línea).
         $this->assertStringNotContainsString("\n", $dia2);
@@ -119,10 +119,10 @@ class CompraTest extends TestCase
 
         $pagada = Compra::mensajePagada('Ana Pérez', 'V-000105', $retirarHasta);
         $this->assertStringContainsString('Recibimos el pago de tu pedido V-000105', $pagada);
-        $this->assertStringContainsString('hasta el miércoles 25/11 inclusive', $pagada);
+        $this->assertStringContainsString('hasta el miércoles 25/11/2026 inclusive', $pagada);
 
         $vet = Compra::mensajeNuevoPedido('Ana Pérez', 'V-000105', 31999.8, $retirarHasta);
-        $this->assertSame('🛍️ Nuevo pedido para retirar: V-000105 de Ana Pérez ($ 31.999,80). Fecha límite de retiro: miércoles 25/11.', $vet);
+        $this->assertSame('🛍️ Nuevo pedido para retirar: V-000105 de Ana Pérez ($ 31.999,80). Fecha límite de retiro: miércoles 25/11/2026.', $vet);
 
         $this->assertStringContainsString('¡Hola, Ana!', $pagada);
         $this->assertStringNotContainsString("\n", $pagada . $vet);
