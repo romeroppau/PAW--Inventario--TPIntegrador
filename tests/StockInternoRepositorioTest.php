@@ -54,6 +54,9 @@ class StockInternoRepositorioTest extends TestCase
         foreach (['producto' => $this->productos, 'insumo' => $this->insumos] as $tabla => $ids) {
             foreach ($ids as $id) {
                 $this->db->prepare("DELETE FROM movimiento_inventario WHERE {$tabla}_id = ?")->execute([$id]);
+                if ($tabla === 'producto') {
+                    $this->db->prepare('DELETE FROM lote_producto WHERE producto_id = ?')->execute([$id]);
+                }
                 $this->db->prepare("DELETE FROM $tabla WHERE id = ?")->execute([$id]);
             }
         }
@@ -215,12 +218,55 @@ class StockInternoRepositorioTest extends TestCase
         return 'prueba-' . bin2hex(random_bytes(8));
     }
 
+    // Migración 028: en una consulta, un producto sale de los lotes sin vencer, el que vence primero
+    // antes; si hacen falta dos lotes, cada uno tiene su movimiento. Los vencidos no se usan.
+    public function testUnProductoSaleDelLoteQueVencePrimeroSinUsarLosVencidos(): void
+    {
+        $producto = $this->crearProducto(0);
+        $this->agregarLote($producto, 5, '2020-01-01');
+        $tarde = $this->agregarLote($producto, 6, '2099-12-31');
+        $temprano = $this->agregarLote($producto, 2, '2099-01-01');
+        $operacion = $this->operacion();
+
+        $r = $this->repo->descontar($this->usuarioId, [$this->item('PRODUCTO', $producto, 4, $operacion)]);
+        $this->assertSame('APLICADO', $r['resultado']);
+        $lotes = $this->db->query("SELECT id, stock FROM lote_producto WHERE producto_id = $producto")->fetchAll(PDO::FETCH_KEY_PAIR);
+        $this->assertSame([0, 4], [(int) $lotes[$temprano], (int) $lotes[$tarde]]);
+        $this->assertSame(9, $this->stock('producto', $producto), 'el total incluye el lote vencido');
+
+        $movs = $this->db->query("SELECT lote_id, cantidad FROM movimiento_inventario WHERE producto_id = $producto ORDER BY id")->fetchAll(PDO::FETCH_KEY_PAIR);
+        $this->assertSame([$temprano => 2, $tarde => 2], array_map('intval', $movs));
+
+        // El reintento suma los dos movimientos: no descuenta de nuevo.
+        $r = $this->repo->descontar($this->usuarioId, [$this->item('PRODUCTO', $producto, 4, $operacion)]);
+        $this->assertSame('DUPLICADA', $r['resultado']);
+
+        // Pedir más de lo que hay sin vencer (4) no descuenta nada, aunque con el vencido alcanzaría.
+        $r = $this->repo->descontar($this->usuarioId, [$this->item('PRODUCTO', $producto, 5, $this->operacion())]);
+        $this->assertSame(['resultado' => 'STOCK_INSUFICIENTE', 'items' => [['tipo' => 'PRODUCTO', 'id' => $producto, 'stock' => 4]]], $r);
+    }
+
+    private function agregarLote(int $producto, int $stock, ?string $vencimiento): int
+    {
+        $this->db->prepare('INSERT INTO lote_producto (producto_id, vencimiento, stock, creado_en) VALUES (?, ?, ?, NOW())')
+            ->execute([$producto, $vencimiento, $stock]);
+        $lote = (int) $this->db->lastInsertId();
+        (new Lotes($this->db))->sincronizar($producto);
+
+        return $lote;
+    }
+
+    // El producto con su stock en un lote que no vence.
     private function crearProducto(int $stock): int
     {
         $this->db->prepare("INSERT INTO producto (nombre, precio, stock, categoria, especie_destino, etapa_vida)
                             VALUES ('Producto de prueba stock interno', 1000, ?, 'MEDICAMENTO', 'TODAS', 'TODAS')")
             ->execute([$stock]);
-        return $this->productos[] = (int) $this->db->lastInsertId();
+        $id = (int) $this->db->lastInsertId();
+        if ($stock > 0) {
+            $this->db->prepare('INSERT INTO lote_producto (producto_id, stock, creado_en) VALUES (?, ?, NOW())')->execute([$id, $stock]);
+        }
+        return $this->productos[] = $id;
     }
 
     private function crearInsumo(int $stock, bool $activo = true, string $estado = 'DISPONIBLE'): int

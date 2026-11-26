@@ -4,7 +4,9 @@
 // sección "Promociones". No usa la base: el SQL está en PromocionRepositorio.
 // - El descuento es un porcentaje entero entre 5 y 90.
 // - Dura hasta el día "hasta" inclusive: desde hoy y como mucho 90 días, y nunca después del
-//   vencimiento del producto (vencido, el producto ya no se vende).
+//   vencimiento de su lote (vencido, el lote ya no se vende).
+// - Es de un lote (migración 028): el descuento vale para las unidades que le quedan a ese lote. Si
+//   se compran más, las demás van a precio normal (cantidadConDescuento). Sin unidades, ya no se ve.
 // - El precio con descuento se calcula siempre con el precio del producto de ese momento.
 class Promocion
 {
@@ -15,10 +17,26 @@ class Promocion
     // Para las consultas que traen productos: la promoción vigente del producto "p" (a lo sumo una,
     // por el índice único de la tabla) y el precio final, con o sin descuento. La cuenta se hace en
     // MySQL (con DECIMAL, sin errores de redondeo) y es la misma en el catálogo, el carrito y la compra.
-    public const JOIN_VIGENTE = 'LEFT JOIN promocion pr ON pr.producto_id = p.id AND pr.terminada_en IS NULL AND pr.hasta >= CURDATE()';
+    // "lp" es el lote de la promoción: solo cuenta si le quedan unidades y no venció.
+    public const JOIN_VIGENTE = 'LEFT JOIN (promocion pr JOIN lote_producto lp ON lp.id = pr.lote_id AND lp.stock > 0
+                                     AND (lp.vencimiento IS NULL OR lp.vencimiento >= CURDATE()))
+                                 ON pr.producto_id = p.id AND pr.terminada_en IS NULL AND pr.hasta >= CURDATE()';
     public const PRECIO_FINAL = 'ROUND(p.precio * (100 - COALESCE(pr.porcentaje, 0)) / 100, 2)';
 
-    // Valida el pedido de "Publicitar" ({porcentaje, hasta}) para un producto que vence en
+    // Cuántas de $cantidad unidades van con descuento: las que le quedan al lote de la promoción
+    // ($quedan; null si no hay promoción). Las demás, a precio normal.
+    public static function cantidadConDescuento(int $cantidad, ?int $quedan): int
+    {
+        return $quedan === null ? 0 : max(0, min($cantidad, $quedan));
+    }
+
+    // El subtotal de un ítem: las unidades con descuento a $precioPromocion y las demás a $precio.
+    public static function subtotal(int $cantidad, float $precio, int $conDescuento, ?float $precioPromocion): float
+    {
+        return round(($cantidad - $conDescuento) * $precio + $conDescuento * ($precioPromocion ?? $precio), 2);
+    }
+
+    // Valida el pedido de "Publicitar" ({porcentaje, hasta}) para un lote que vence en
     // $vencimiento (o null si no vence). Devuelve [datos limpios, errores por campo].
     public static function validar(mixed $datos, DateTimeImmutable $hoy, ?string $vencimiento): array
     {
@@ -48,7 +66,7 @@ class Promocion
             $errores['hasta'] = 'La promoción puede durar como mucho ' . self::DIAS_MAXIMOS . ' días (hasta el '
                 . $maximo->format('d/m/Y') . ')';
         } elseif ($vencimiento !== null && $hasta->format('Y-m-d') > $vencimiento) {
-            $errores['hasta'] = 'El producto vence el ' . self::texto($vencimiento)
+            $errores['hasta'] = 'El lote vence el ' . self::texto($vencimiento)
                 . ': la promoción no puede durar más que eso';
         } else {
             $limpios['hasta'] = $hasta->format('Y-m-d');

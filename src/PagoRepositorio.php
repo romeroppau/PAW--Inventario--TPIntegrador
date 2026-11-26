@@ -108,12 +108,13 @@ class PagoRepositorio extends CompraRepositorio
         $this->db->prepare("UPDATE carrito SET estado = 'PAGADO' WHERE id = ?")->execute([$factura['carrito_id']]);
     }
 
-    // Vuelve a reservar el stock de una compra cancelada. Si algún producto no alcanza o ya no está a
-    // la venta, no reserva nada y devuelve false.
+    // Vuelve a reservar el stock de una compra cancelada, de los lotes que vencen primero (028; los
+    // precios ya se cobraron). Si algún producto no alcanza o ya no está a la venta, no reserva nada y
+    // devuelve false.
     private function reservarDeNuevo(array $factura): bool
     {
         $consulta = $this->db->prepare(
-            'SELECT i.producto_id, i.cantidad, p.stock, (' . self::A_LA_VENTA . ') AS a_la_venta
+            'SELECT i.producto_id, i.cantidad, ' . Lotes::STOCK_VENDIBLE . ' AS stock, (' . self::A_LA_VENTA . ') AS a_la_venta
              FROM item_carrito i JOIN producto p ON p.id = i.producto_id
              WHERE i.carrito_id = ?
              ORDER BY i.producto_id
@@ -128,10 +129,14 @@ class PagoRepositorio extends CompraRepositorio
             }
         }
 
+        $lotes = new Lotes($this->db);
         foreach ($items as $item) {
-            $this->db->prepare('UPDATE producto SET stock = stock - ? WHERE id = ?')->execute([$item['cantidad'], $item['producto_id']]);
-            $this->registrarMovimiento((int) $item['producto_id'], 'SALIDA', 'VENTA', (int) $item['cantidad'],
-                (int) $factura['cliente_id'], $this->idUnico("revive-{$factura['numero']}-{$item['producto_id']}"));
+            $productoId = (int) $item['producto_id'];
+            foreach ($lotes->sacar($productoId, (int) $item['cantidad']) ?? [] as [$loteId, $tomadas]) {
+                $this->registrarMovimiento($productoId, 'SALIDA', 'VENTA', $tomadas, (int) $factura['cliente_id'],
+                    $this->idUnico("revive-{$factura['numero']}-$productoId-lote-$loteId"), $loteId);
+            }
+            $lotes->sincronizar($productoId);
         }
 
         return true;

@@ -21,6 +21,8 @@ $router->delete('/api/inventario/productos/{id}', [ProductoControlador::class, '
 $router->post('/api/inventario/productos/{id}/reactivar', [ProductoControlador::class, 'reactivar']);
 $router->post('/api/inventario/productos/{id}/stock', [ProductoControlador::class, 'cargarStock']);
 $router->post('/api/inventario/productos/{id}/retiro', [ProductoControlador::class, 'retirarStock']);
+// Corregir el número o el vencimiento de un lote (migración 028).
+$router->put('/api/inventario/productos/{id}/lotes/{lote}', [ProductoControlador::class, 'editarLote']);
 $router->get('/api/inventario/productos/{id}/movimientos', [ProductoControlador::class, 'movimientos']);
 
 // Salud del módulo.

@@ -6,6 +6,8 @@
 //   - Consulta (Pacientes, ConsultaControlador::finalizar): "consulta-{id}-insumo-{ítem}" o "consulta-{id}-producto-{ítem}".
 //   - Compra (CompraRepositorio): "venta-V-000123-{producto}", "cancela-V-000123-{producto}" (también con
 //     prefijo, como los de las semillas: "semilla-venta-V-000101-101", "prod-venta-V-030002-3001").
+//   - Desde la migración 028 un movimiento es de un lote: los que siguen al primero terminan en
+//     "-lote-{lote}" (y el que reserva de nuevo una compra pagada tarde empieza con "revive-").
 class ReferenciaMovimiento
 {
     // ['consulta_id' => int|null, 'compra' => "V-000123"|null]
@@ -15,9 +17,9 @@ class ReferenciaMovimiento
         $compra = null;
 
         if ($idOperacion !== null) {
-            if (preg_match('/(?:^|-)consulta-(\d+)-(?:insumo|producto)-\d+$/', $idOperacion, $m) === 1) {
+            if (preg_match('/(?:^|-)consulta-(\d+)-(?:insumo|producto)-\d+(?:-lote-\d+)?$/', $idOperacion, $m) === 1) {
                 $consulta = (int) $m[1];
-            } elseif (preg_match('/(?:^|-)(?:venta|cancela)-(V-\d{6})-\d+(?:-\d+)?$/', $idOperacion, $m) === 1) {
+            } elseif (preg_match('/(?:^|-)(?:venta|cancela|revive)-(V-\d{6})-\d+(?:-lote-\d+)?(?:-\d+)?$/', $idOperacion, $m) === 1) {
                 $compra = $m[1];
             }
         }
