@@ -20,7 +20,8 @@ class CompraRepositorio
         . 'COALESCE(f.reintegro_horas, ' . Compra::HORAS_ANTICIPACION_REINTEGRO . ') AS reintegro_horas, '
         . 'f.reintegro_porcentaje, f.reintegro_monto, f.reintegro_estado';
 
-    protected const A_LA_VENTA = 'p.activo = 1 AND (p.fecha_vencimiento IS NULL OR p.fecha_vencimiento >= CURDATE())';
+    // Activo y sin todo su stock vencido (migración 028; la misma regla que el catálogo).
+    protected const A_LA_VENTA = Lotes::A_LA_VENTA;
 
     // Hora de Argentina (-03:00): la fecha de la factura y de los movimientos.
     public function __construct(protected PDO $db)
@@ -62,7 +63,7 @@ class CompraRepositorio
                         'stock' => $item['a_la_venta'] ? $item['stock'] : 0,
                     ];
                 }
-                $total += round($item['precio_unitario'] * $item['cantidad'], 2);
+                $total += Promocion::subtotal($item['cantidad'], $item['precio_lista'], $item['cantidad_promocion'], $item['precio_unitario']);
             }
             if ($problemas !== []) {
                 $this->db->rollBack();
@@ -90,15 +91,30 @@ class CompraRepositorio
             $numero = Compra::numero($facturaId);
             $this->db->prepare('UPDATE factura_compra SET numero = ? WHERE id = ?')->execute([$numero, $facturaId]);
 
-            // La reserva del stock, con su movimiento (un id_operacion por producto: nunca se repite).
-            // Cada ítem guarda el precio que se cobró: la factura lo muestra aunque después cambie el
-            // precio del producto o termine la promoción.
+            // La reserva del stock, con su movimiento por lote (028): las unidades con descuento salen del
+            // lote de la promoción y las demás, del que vence primero. El id_operacion nunca se repite:
+            // "venta-V-…-{producto}" el primer lote y "…-lote-{lote}" los demás.
+            // Cada ítem guarda lo que se cobró (precio de lista, y cuántas con descuento y a qué precio):
+            // la factura lo muestra aunque después cambie el precio del producto o termine la promoción.
+            $lotes = new Lotes($this->db);
             foreach ($items as $item) {
-                $this->db->prepare('UPDATE item_carrito SET precio_unitario = ? WHERE carrito_id = ? AND producto_id = ?')
-                    ->execute([number_format($item['precio_unitario'], 2, '.', ''), $carritoId, $item['producto_id']]);
-                $this->db->prepare('UPDATE producto SET stock = stock - ? WHERE id = ?')
-                    ->execute([$item['cantidad'], $item['producto_id']]);
-                $this->registrarMovimiento($item['producto_id'], 'SALIDA', 'VENTA', $item['cantidad'], $compradorId, "venta-$numero-{$item['producto_id']}");
+                $this->db->prepare(
+                    'UPDATE item_carrito SET precio_unitario = ?, cantidad_promocion = ?, precio_promocion = ?
+                     WHERE carrito_id = ? AND producto_id = ?'
+                )->execute([
+                    number_format($item['precio_lista'], 2, '.', ''), $item['cantidad_promocion'],
+                    $item['cantidad_promocion'] > 0 ? number_format($item['precio_unitario'], 2, '.', '') : null,
+                    $carritoId, $item['producto_id'],
+                ]);
+                $partes = $lotes->sacar(
+                    $item['producto_id'], $item['cantidad'],
+                    $item['cantidad_promocion'] > 0 ? [$item['lote_promocion'], $item['cantidad_promocion']] : null
+                );
+                foreach ($partes as $i => [$loteId, $tomadas]) {
+                    $idOperacion = "venta-$numero-{$item['producto_id']}" . ($i === 0 ? '' : "-lote-$loteId");
+                    $this->registrarMovimiento($item['producto_id'], 'SALIDA', 'VENTA', $tomadas, $compradorId, $idOperacion, $loteId);
+                }
+                $lotes->sincronizar($item['producto_id']);
             }
 
             $this->db->prepare("UPDATE carrito SET estado = 'CONFIRMADO' WHERE id = ?")->execute([$carritoId]);
@@ -242,9 +258,10 @@ class CompraRepositorio
                 $compra['entregada_en'] = $fila['entregada_en'];
                 $compra['entregada_por'] = $fila['entregada_por'];
             }
+            // Qué tiene que entregar: una línea por producto (aunque una parte haya ido con descuento).
             $compra['items'] = array_map(
                 fn (array $item) => ['nombre' => $item['nombre'], 'cantidad' => $item['cantidad']],
-                $this->itemsDeFactura((int) $fila['id'])
+                $this->productosDeFactura((int) $fila['id'])
             );
             return $compra;
         }, $consulta->fetchAll()), $porPagina);
@@ -518,8 +535,8 @@ class CompraRepositorio
     // ---------- Ayudas ----------
 
     // Cancela una factura ya bloqueada: factura CANCELADA (con el motivo y cuándo), carrito CANCELADO
-    // y el stock vuelve (ENTRADA / VENTA_CANCELADA). $usuarioId es quien la cancela, o null si es
-    // automática. $motivo: COMPRADOR, SIN_PAGO o VENCIDA.
+    // y el stock vuelve (ENTRADA / VENTA_CANCELADA) a los lotes de los que salió (028). $usuarioId es
+    // quien la cancela, o null si es automática. $motivo: COMPRADOR, SIN_PAGO o VENCIDA.
     // Se llama siempre dentro de una transacción. La usan el comprador y los vencimientos.
     protected function cancelar(array $factura, ?int $usuarioId, string $motivo): void
     {
@@ -527,10 +544,16 @@ class CompraRepositorio
             ->execute([$motivo, $factura['id']]);
         $this->db->prepare("UPDATE carrito SET estado = 'CANCELADO' WHERE id = ?")->execute([$factura['carrito_id']]);
 
-        foreach ($this->itemsDeFactura((int) $factura['id']) as $item) {
-            $this->db->prepare('UPDATE producto SET stock = stock + ? WHERE id = ?')
-                ->execute([$item['cantidad'], $item['producto_id']]);
-            $this->registrarMovimiento($item['producto_id'], 'ENTRADA', 'VENTA_CANCELADA', $item['cantidad'], $usuarioId, $this->idUnico("cancela-{$factura['numero']}-{$item['producto_id']}"));
+        $lotes = new Lotes($this->db);
+        $reservado = $lotes->reservadoPorCompra($factura['numero']);
+        foreach ($this->productosDeFactura((int) $factura['id']) as $item) {
+            $productoId = $item['producto_id'];
+            foreach ($lotes->repartirDevolucion($productoId, $item['cantidad'], $reservado[$productoId] ?? []) as [$loteId, $cantidad]) {
+                $lotes->sumar($loteId, $cantidad);
+                $this->registrarMovimiento($productoId, 'ENTRADA', 'VENTA_CANCELADA', $cantidad, $usuarioId,
+                    $this->idUnico("cancela-{$factura['numero']}-$productoId-lote-$loteId"), $loteId);
+            }
+            $lotes->sincronizar($productoId);
         }
     }
 
@@ -549,12 +572,14 @@ class CompraRepositorio
     }
 
     // Los ítems del carrito con su producto, bloqueando los productos (para confirmar).
-    // El precio es el de hoy, con la promoción vigente si tiene (el mismo que mostró el carrito).
+    // El precio es el de hoy, con la promoción vigente si tiene (el mismo que mostró el carrito): con
+    // descuento, solo las unidades que le quedan al lote de la promoción (cantidad_promocion).
     private function itemsParaConfirmar(int $carritoId): array
     {
         $consulta = $this->db->prepare(
-            'SELECT i.producto_id, p.nombre, i.cantidad, ' . Promocion::PRECIO_FINAL . ' AS precio_unitario, p.stock,
-                    (' . self::A_LA_VENTA . ') AS a_la_venta
+            'SELECT i.producto_id, p.nombre, i.cantidad, ' . Promocion::PRECIO_FINAL . ' AS precio_unitario, p.precio AS precio_lista,
+                    pr.id AS promocion_id, lp.id AS lote_promocion, lp.stock AS promocion_quedan,
+                    ' . Lotes::STOCK_VENDIBLE . ' AS stock, (' . self::A_LA_VENTA . ') AS a_la_venta
              FROM item_carrito i JOIN producto p ON p.id = i.producto_id
              ' . Promocion::JOIN_VIGENTE . '
              WHERE i.carrito_id = ?
@@ -563,21 +588,62 @@ class CompraRepositorio
         );
         $consulta->execute([$carritoId]);
 
+        return array_map(function (array $fila) {
+            $cantidad = (int) $fila['cantidad'];
+            $quedan = $fila['promocion_id'] === null ? null : (int) $fila['promocion_quedan'];
+
+            return [
+                'producto_id' => (int) $fila['producto_id'],
+                'nombre' => $fila['nombre'],
+                'cantidad' => $cantidad,
+                'precio_unitario' => (float) $fila['precio_unitario'],
+                'precio_lista' => (float) $fila['precio_lista'],
+                'cantidad_promocion' => Promocion::cantidadConDescuento($cantidad, $quedan),
+                'lote_promocion' => $fila['lote_promocion'] === null ? null : (int) $fila['lote_promocion'],
+                'stock' => (int) $fila['stock'],
+                'a_la_venta' => (bool) $fila['a_la_venta'],
+            ];
+        }, $consulta->fetchAll());
+    }
+
+    // Las líneas de una factura, con el precio del momento. Un producto que se llevó en parte con
+    // descuento (028) tiene dos líneas: las unidades con descuento (en_promocion: true) y las demás.
+    protected function itemsDeFactura(int $facturaId): array
+    {
+        $lineas = [];
+        foreach ($this->filasDeFactura($facturaId) as $fila) {
+            $cantidad = (int) $fila['cantidad'];
+            $conDescuento = (int) $fila['cantidad_promocion'];
+            $base = ['producto_id' => (int) $fila['producto_id'], 'nombre' => $fila['nombre']];
+            if ($conDescuento > 0) {
+                $precio = (float) $fila['precio_promocion'];
+                $lineas[] = $base + ['precio_unitario' => $precio, 'cantidad' => $conDescuento,
+                    'subtotal' => round($precio * $conDescuento, 2), 'en_promocion' => true];
+            }
+            if ($cantidad > $conDescuento) {
+                $precio = (float) $fila['precio_unitario'];
+                $lineas[] = $base + ['precio_unitario' => $precio, 'cantidad' => $cantidad - $conDescuento,
+                    'subtotal' => round($precio * ($cantidad - $conDescuento), 2), 'en_promocion' => false];
+            }
+        }
+
+        return $lineas;
+    }
+
+    // Los productos de una factura con la cantidad total de cada uno (para entregar y devolver stock).
+    protected function productosDeFactura(int $facturaId): array
+    {
         return array_map(fn (array $fila) => [
             'producto_id' => (int) $fila['producto_id'],
             'nombre' => $fila['nombre'],
             'cantidad' => (int) $fila['cantidad'],
-            'precio_unitario' => (float) $fila['precio_unitario'],
-            'stock' => (int) $fila['stock'],
-            'a_la_venta' => (bool) $fila['a_la_venta'],
-        ], $consulta->fetchAll());
+        ], $this->filasDeFactura($facturaId));
     }
 
-    // Los productos de una factura, con el precio del momento.
-    protected function itemsDeFactura(int $facturaId): array
+    private function filasDeFactura(int $facturaId): array
     {
         $consulta = $this->db->prepare(
-            'SELECT i.producto_id, p.nombre, i.precio_unitario, i.cantidad
+            'SELECT i.producto_id, p.nombre, i.precio_unitario, i.cantidad, i.cantidad_promocion, i.precio_promocion
              FROM factura_compra f
              JOIN item_carrito i ON i.carrito_id = f.carrito_id
              JOIN producto p ON p.id = i.producto_id
@@ -586,13 +652,7 @@ class CompraRepositorio
         );
         $consulta->execute([$facturaId]);
 
-        return array_map(fn (array $fila) => [
-            'producto_id' => (int) $fila['producto_id'],
-            'nombre' => $fila['nombre'],
-            'precio_unitario' => (float) $fila['precio_unitario'],
-            'cantidad' => (int) $fila['cantidad'],
-            'subtotal' => round((float) $fila['precio_unitario'] * (int) $fila['cantidad'], 2),
-        ], $consulta->fetchAll());
+        return $consulta->fetchAll();
     }
 
     // De una lista con un elemento de más (se pidió $porPagina + 1), devuelve [los $porPagina, hayMas].
@@ -613,13 +673,13 @@ class CompraRepositorio
         return $usados === 0 ? $base : $base . '-' . ($usados + 1);
     }
 
-    // Movimiento de stock de un producto. id_operacion es único: nunca se registra dos veces.
-    protected function registrarMovimiento(int $productoId, string $tipo, string $motivo, int $cantidad, ?int $usuarioId, string $idOperacion): void
+    // Movimiento de stock de un lote de un producto. id_operacion es único: nunca se registra dos veces.
+    protected function registrarMovimiento(int $productoId, string $tipo, string $motivo, int $cantidad, ?int $usuarioId, string $idOperacion, int $loteId): void
     {
         $this->db->prepare(
-            'INSERT INTO movimiento_inventario (producto_id, tipo, cantidad, motivo, usuario_id, id_operacion)
-             VALUES (?, ?, ?, ?, ?, ?)'
-        )->execute([$productoId, $tipo, $cantidad, $motivo, $usuarioId, $idOperacion]);
+            'INSERT INTO movimiento_inventario (producto_id, lote_id, tipo, cantidad, motivo, usuario_id, id_operacion)
+             VALUES (?, ?, ?, ?, ?, ?, ?)'
+        )->execute([$productoId, $loteId, $tipo, $cantidad, $motivo, $usuarioId, $idOperacion]);
     }
 
     // Una compra con sus plazos (contrato, "Mis compras"): pagar_antes_de solo si falta pagar,

@@ -155,7 +155,7 @@ class ProductoControlador
     }
 
     // POST /api/inventario/productos/{id}/reactivar
-    // Deshace la baja: vuelve a la tienda (si no está vencido) con su stock e historial.
+    // Deshace la baja: vuelve a la tienda (si no tiene todo vencido) con su stock e historial.
     // Si ya estaba activo no cambia nada.
     public static function reactivar(array $parametros): void
     {
@@ -174,7 +174,8 @@ class ProductoControlador
         Response::json($productos->buscarPorId($id));
     }
 
-    // POST /api/inventario/productos/{id}/stock
+    // POST /api/inventario/productos/{id}/stock — {cantidad, lote_id} (un lote que ya existe),
+    // {cantidad, lote: {codigo, vencimiento}} (un lote nuevo) o {cantidad} (el lote sin vencimiento).
     public static function cargarStock(array $parametros): void
     {
         $sesion = self::veterinario(true);
@@ -187,25 +188,73 @@ class ProductoControlador
             return;
         }
 
-        $cantidad = ValidadorProducto::cantidad(Request::json()['cantidad'] ?? null);
-
+        $datos = Request::json();
+        $errores = [];
+        $cantidad = ValidadorProducto::cantidad($datos['cantidad'] ?? null);
         if ($cantidad === null) {
-            Response::json([
-                'error' => 'Datos inválidos',
-                'campos' => ['cantidad' => 'La cantidad debe ser un número entero entre 1 y 100.000']
-            ], 400);
+            $errores['cantidad'] = 'La cantidad debe ser un número entero entre 1 y 100.000';
+        }
+
+        $loteId = null;
+        $nuevo = null;
+        if (($datos['lote_id'] ?? null) !== null) {
+            $loteId = self::id(['id' => is_int($datos['lote_id']) ? (string) $datos['lote_id'] : $datos['lote_id']]);
+            if ($loteId === null) {
+                $errores['lote_id'] = 'Elegí un lote del producto';
+            }
+        } elseif (($datos['lote'] ?? null) !== null) {
+            [$nuevo, $erroresLote] = Lotes::validarNuevo($datos['lote'], date('Y-m-d'));
+            foreach ($erroresLote as $campo => $mensaje) {
+                $errores["lote.$campo"] = $mensaje;
+            }
+        }
+
+        if ($errores !== []) {
+            Response::json(['error' => 'Datos inválidos', 'campos' => $errores], 400);
             return;
         }
 
-        $stock = $productos->cargarStock($id, $cantidad, (int) $sesion['id']);
+        $resultado = $productos->cargarStock($id, $cantidad, (int) $sesion['id'], $loteId, $nuevo);
 
-        // El producto existe (se comprobó arriba), así que si no se pudo cargar es porque está dado de baja.
-        if ($stock === null) {
+        if ($resultado === 'baja') {
             Response::json(['error' => 'El producto está dado de baja'], 409);
             return;
         }
+        if ($resultado === 'lote_inexistente') {
+            Response::json(['error' => 'Datos inválidos', 'campos' => ['lote_id' => 'Ese lote no es de este producto']], 400);
+            return;
+        }
 
-        Response::json(['id' => $id, 'stock' => $stock]);
+        Response::json(['id' => $id, 'stock' => $resultado['stock'], 'lote' => $resultado['lote']]);
+    }
+
+    // PUT /api/inventario/productos/{id}/lotes/{lote} — {codigo, vencimiento}: corrige un lote mal cargado.
+    public static function editarLote(array $parametros): void
+    {
+        self::veterinario(true);
+
+        $productos = self::repositorio();
+        $id = self::id($parametros);
+        $loteId = self::id(['id' => $parametros['lote'] ?? '']);
+
+        if ($id === null || $loteId === null || !$productos->existe($id)) {
+            Response::json(['error' => self::NO_ENCONTRADO], 404);
+            return;
+        }
+
+        // Se puede corregir a una fecha pasada (un lote que ya venció y se cargó con otra fecha).
+        [$limpios, $errores] = Lotes::validarNuevo(Request::json(), '0000-00-00');
+        if ($errores !== []) {
+            Response::json(['error' => 'Datos inválidos', 'campos' => $errores], 400);
+            return;
+        }
+
+        if (!$productos->editarLote($id, $loteId, $limpios)) {
+            Response::json(['error' => 'Ese lote no es de este producto'], 404);
+            return;
+        }
+
+        Response::json($productos->buscarPorId($id));
     }
 
     // POST /api/inventario/productos/{id}/retiro
@@ -222,7 +271,8 @@ class ProductoControlador
             return;
         }
 
-        $cantidad = ValidadorProducto::cantidad(Request::json()['cantidad'] ?? null);
+        $datos = Request::json();
+        $cantidad = ValidadorProducto::cantidad($datos['cantidad'] ?? null);
 
         if ($cantidad === null) {
             Response::json([
@@ -232,16 +282,28 @@ class ProductoControlador
             return;
         }
 
-        $stock = $productos->retirarStock($id, $cantidad, (int) $sesion['id']);
-
-        // Si no se pudo, se vuelve a leer para saber por qué: dado de baja o stock insuficiente.
-        if ($stock === null) {
-            $producto = $productos->buscarPorId($id);
-            if (!$producto['activo']) {
-                Response::json(['error' => 'El producto está dado de baja'], 409);
-            } else {
-                Response::json(['error' => 'Stock insuficiente', 'stock' => $producto['stock']], 409);
+        // De qué lote (028). Sin lote: de los que vencen primero (los vencidos antes que nada).
+        $loteId = null;
+        if (($datos['lote_id'] ?? null) !== null) {
+            $loteId = self::id(['id' => is_int($datos['lote_id']) ? (string) $datos['lote_id'] : $datos['lote_id']]);
+            if ($loteId === null) {
+                Response::json(['error' => 'Datos inválidos', 'campos' => ['lote_id' => 'Elegí un lote del producto']], 400);
+                return;
             }
+        }
+
+        $stock = $productos->retirarStock($id, $cantidad, (int) $sesion['id'], $loteId);
+
+        if ($stock === 'baja') {
+            Response::json(['error' => 'El producto está dado de baja'], 409);
+            return;
+        }
+        if ($stock === 'lote_inexistente') {
+            Response::json(['error' => 'Datos inválidos', 'campos' => ['lote_id' => 'Ese lote no es de este producto']], 400);
+            return;
+        }
+        if (is_array($stock)) {
+            Response::json(['error' => 'Stock insuficiente', 'stock' => $stock[1]], 409);
             return;
         }
 

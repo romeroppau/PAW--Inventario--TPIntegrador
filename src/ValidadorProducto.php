@@ -17,7 +17,7 @@ class ValidadorProducto
         return self::validar($datos, true);
     }
 
-    // Edición: sin stock (se ignora si llega) y se permite un vencimiento ya pasado.
+    // Edición: sin stock ni vencimiento (se ignoran si llegan: son de los lotes).
     public static function edicion(array $datos): array
     {
         return self::validar($datos, false);
@@ -104,17 +104,24 @@ class ValidadorProducto
             }
         }
 
-        // vencimiento (opcional): AAAA-MM-DD; en el alta, de hoy en adelante
-        $vencimiento = $datos['vencimiento'] ?? null;
-        if ($vencimiento === null || $vencimiento === '') {
-            $limpios['vencimiento'] = null;
-        } elseif (!is_string($vencimiento) || !self::esFecha($vencimiento)) {
-            $errores['vencimiento'] = 'La fecha de vencimiento no es válida';
-        } elseif ($esAlta && $vencimiento < date('Y-m-d')) {
-            // Las fechas AAAA-MM-DD se pueden comparar como texto.
-            $errores['vencimiento'] = 'La fecha de vencimiento no puede ser anterior a hoy';
-        } else {
-            $limpios['vencimiento'] = $vencimiento;
+        // Solo en el alta (migración 028: el vencimiento es de cada lote): el primer lote, con su
+        // vencimiento (opcional, AAAA-MM-DD, de hoy en adelante) y su número ("lote", opcional).
+        // En la edición se ignoran: los lotes se cargan y se corrigen aparte.
+        if ($esAlta) {
+            [$lote, $erroresLote] = Lotes::validarNuevo(
+                ['codigo' => $datos['lote'] ?? null, 'vencimiento' => $datos['vencimiento'] ?? null],
+                date('Y-m-d')
+            );
+            if (isset($erroresLote['codigo'])) {
+                $errores['lote'] = $erroresLote['codigo'];
+            } else {
+                $limpios['lote'] = $lote['codigo'];
+            }
+            if (isset($erroresLote['vencimiento'])) {
+                $errores['vencimiento'] = $erroresLote['vencimiento'];
+            } else {
+                $limpios['vencimiento'] = $lote['vencimiento'];
+            }
         }
 
         // imagen (opcional). En la edición, si no llega se conserva la actual: por eso la clave

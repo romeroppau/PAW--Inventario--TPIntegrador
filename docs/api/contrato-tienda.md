@@ -58,17 +58,18 @@ Toca "Ir a pagar" (confirmar)                                        → factura
 
 ### Qué productos se pueden comprar
 
-Los mismos que se ven en el catálogo: **activos y no vencidos**. Si un producto deja de estar a la venta (se da de baja o vence), no se puede agregar al carrito ni confirmar una compra que lo tenga: hay que quitarlo.
+Los mismos que se ven en el catálogo: **activos y sin todo su stock vencido** (`contrato.md`, "Lotes"). Si un producto deja de estar a la venta (se da de baja o se le vence todo), no se puede agregar al carrito ni confirmar una compra que lo tenga: hay que quitarlo.
 
 ### Stock
 
-- **Armar el carrito no toca el stock.** Pero no se puede agregar ni pedir más unidades de las que hay: no hay otro tope que el stock.
+- **Armar el carrito no toca el stock.** Pero no se puede agregar ni pedir más unidades de las que hay sin vencer: no hay otro tope que el stock.
 - **Al confirmar, el stock se reserva:** se resta y queda un movimiento `SALIDA` con motivo `VENTA`. Se vuelve a controlar en ese momento, en una sola transacción: si un producto ya no alcanza (otro lo compró mientras tanto), no se reserva nada.
-- **Cuando una compra se cancela** (arrepentimiento, falta de pago o vencimiento), el stock vuelve: movimiento `ENTRADA` con motivo `VENTA_CANCELADA`.
+- **De qué lote (26/11, migración 028):** las unidades con el descuento de una promoción salen del lote de la promoción; las demás, del lote sin vencer que vence primero (y si no alcanza, del siguiente). Cada lote tiene su movimiento.
+- **Cuando una compra se cancela** (arrepentimiento, falta de pago o vencimiento), el stock vuelve al lote del que salió: movimiento `ENTRADA` con motivo `VENTA_CANCELADA`.
 
 ### Precios
 
-El carrito muestra siempre el **precio de hoy** de cada producto, con el descuento de su promoción si tiene una vigente (ver "Promociones"). Al confirmar se cobra ese mismo precio, y cada ítem de la compra lo guarda (`precio_unitario`): la factura no cambia aunque después cambie el precio del producto o termine la promoción. El total lo calcula siempre el servidor.
+El carrito muestra siempre el **precio de hoy** de cada producto, con el descuento de su promoción si tiene una vigente (ver "Promociones"). El descuento vale **solo para las unidades que le quedan al lote de la promoción** (26/11): si se llevan más, las demás van a precio normal. Al confirmar se cobra lo mismo, y cada ítem de la compra lo guarda (el precio, y cuántas unidades fueron con descuento y a qué precio): la factura no cambia aunque después cambie el precio del producto o termine la promoción. El total lo calcula siempre el servidor.
 
 (Hasta la Entrega 5 el precio se copiaba al agregar el producto y quedaba fijo. Se cambió con las promociones: si no, un producto agregado durante una promoción se seguía cobrando con descuento después de que terminaba.)
 
@@ -148,6 +149,8 @@ El carrito abierto del comprador. Si todavía no tiene uno, responde un carrito 
       "precio_unitario": 15999.90,
       "precio_sin_descuento": null,
       "descuento": null,
+      "promocion_quedan": null,
+      "cantidad_promocion": 0,
       "cantidad": 2,
       "subtotal": 31999.80,
       "stock": 20,
@@ -165,7 +168,8 @@ El carrito abierto del comprador. Si todavía no tiene uno, responde un carrito 
 
 - `precio_unitario`: el precio de hoy, con el descuento si el producto está en promoción.
 - `precio_sin_descuento` y `descuento`: si está en promoción, el precio sin descuento y el porcentaje (para mostrarlo tachado); si no, `null`.
-- `stock`: lo que hay disponible hoy, para que la pantalla no ofrezca más.
+- `promocion_quedan` y `cantidad_promocion` (26/11): si está en promoción, cuántas unidades le quedan al lote de la promoción y cuántas de las del carrito van con descuento (como mucho esas); las demás (`cantidad - cantidad_promocion`) van a `precio_sin_descuento`. `subtotal` ya hace esa cuenta. Sin promoción: `null` y `0`.
+- `stock`: lo que hay disponible hoy (sin los lotes vencidos), para que la pantalla no ofrezca más.
 - `a_la_venta`: `false` si el producto se dio de baja o venció después de agregarlo. La pantalla avisa que hay que quitarlo: así no se puede confirmar.
 - `tiene_imagen`: si el producto tiene foto. La foto se pide aparte, con `GET /api/tienda/productos/{id}/imagen`.
 - `minutos_para_pagar`, `dias_habiles_para_retirar` y `retirar_hasta_si_compra_hoy` (con la configuración de hoy): para explicar los plazos antes de pagar ("tenés 15 minutos para pagar" y "retirás hasta el miércoles 25/11"). Vienen también con el carrito vacío.
@@ -254,10 +258,12 @@ Si algo falla, no se reserva nada.
   "segundos_para_pagar": 900,
   "retirar_hasta": "2026-11-25",
   "items": [
-    { "producto_id": 101, "nombre": "Alimento cachorro 3 kg", "precio_unitario": 15999.90, "cantidad": 2, "subtotal": 31999.80 }
+    { "producto_id": 101, "nombre": "Alimento cachorro 3 kg", "precio_unitario": 15999.90, "cantidad": 2, "subtotal": 31999.80, "en_promocion": false }
   ]
 }
 ```
+
+Un producto llevado en parte con descuento (26/11) tiene **dos líneas**: las unidades con descuento (`en_promocion: true`, a su precio) y las demás (`en_promocion: false`, a precio normal). Lo mismo en el detalle, la factura y el pago de Mercado Pago ("(con descuento)" en el título).
 
 **Errores:**
 
@@ -353,7 +359,7 @@ La ve **su comprador** y **cualquier veterinario**.
   "entregada_por": null,
   "cancelada_en": null,
   "items": [
-    { "producto_id": 101, "nombre": "Alimento Royal Canin Medium Puppy para cachorros 3 kg", "cantidad": 2, "precio_unitario": 15999.90, "subtotal": 31999.80 }
+    { "producto_id": 101, "nombre": "Alimento Royal Canin Medium Puppy para cachorros 3 kg", "precio_unitario": 15999.90, "cantidad": 2, "subtotal": 31999.80, "en_promocion": false }
   ]
 }
 ```
@@ -538,14 +544,15 @@ Las cancelaciones por falta de pago salen a cualquier hora. Las de vencimiento d
 La veterinaria pone un descuento a un producto desde las sugerencias de Reportes ("Qué liquidar" → **Publicitar**): el producto aparece en la sección **Promociones** de la tienda y en el catálogo con el precio rebajado, y el carrito y la compra cobran ese precio. Tabla `promocion` (migración 016).
 
 - El descuento es un **porcentaje entero de 5 a 90**. El precio con descuento se calcula con el precio del producto de ese momento, redondeado a centavos.
-- Dura **hasta el día `hasta` inclusive**: desde hoy, como mucho 90 días y nunca después del vencimiento del producto.
-- **Una sola promoción vigente por producto.** Para cambiarla, se termina y se publica otra.
-- Vigente = no se terminó y `hasta` es hoy o después. Si el producto se da de baja, vence o se queda sin stock, la promoción sigue vigente pero no aparece en la sección de promociones (en el catálogo, sin stock se ve como siempre: sin "Agregar").
+- **Es de un lote** (26/11, migración 028): el que eligió la veterinaria (desde "Qué liquidar", el lote que vence) o, si no eligió, el lote con stock que vence primero. El descuento vale para las unidades que le quedan a ese lote: dura **hasta el día `hasta` o hasta que se termina el lote**, lo que pase primero. Si un cliente lleva más, las demás van a precio normal.
+- Dura **hasta el día `hasta` inclusive**: desde hoy, como mucho 90 días y nunca después del vencimiento de su lote.
+- **Una sola promoción vigente por producto.** Para cambiarla, se termina y se publica otra. Una cuyo lote se quedó sin unidades se termina sola al publicar otra.
+- Vigente = no se terminó y `hasta` es hoy o después. Si el producto se da de baja o el lote se queda sin unidades (o vence), la promoción sigue vigente pero no se ve en la tienda ni hace descuento.
 - Las promociones no se borran: terminar una guarda cuándo.
 
 ### GET /api/tienda/promociones
 
-Público. Los productos en promoción que se pueden comprar (activos, no vencidos y con stock), del descuento más grande al más chico. Mismo formato que el catálogo (`contrato.md`), sin paginar.
+Público. Los productos en promoción que se pueden comprar (activos, con unidades en el lote de la promoción), del descuento más grande al más chico. Mismo formato que el catálogo (`contrato.md`), sin paginar: `promocion.quedan` dice cuántas unidades quedan con descuento.
 
 **200 OK:**
 
@@ -560,7 +567,7 @@ Público. Los productos en promoción que se pueden comprar (activos, no vencido
       "precio": 9800.00,
       "vencimiento": "2026-12-10",
       "disponible": true,
-      "promocion": { "porcentaje": 30, "precio": 6860.00, "hasta": "2026-12-10" }
+      "promocion": { "porcentaje": 30, "precio": 6860.00, "hasta": "2026-12-10", "quedan": 4 }
     }
   ]
 }
@@ -583,7 +590,9 @@ Veterinario. Las promociones vigentes, de la que termina antes a la que termina 
       "porcentaje": 30,
       "precio_promocion": 6860.00,
       "hasta": "2026-12-10",
-      "stock": 4,
+      "stock": 12,
+      "lote": { "id": 9, "codigo": "L-0425", "vencimiento": "2026-12-10" },
+      "quedan": 4,
       "vencimiento": "2026-12-10",
       "a_la_venta": true,
       "creada_en": "2026-11-20 18:05:00",
@@ -593,7 +602,7 @@ Veterinario. Las promociones vigentes, de la que termina antes a la que termina 
 }
 ```
 
-`a_la_venta`: `false` si el producto se dio de baja o venció (la promoción no se ve en la tienda).
+`stock`: el de todo el producto. `lote` y `quedan` (26/11): el lote de la promoción y las unidades que le quedan (las que van con descuento). `vencimiento`: el del lote. `a_la_venta`: `false` si el producto se dio de baja o el lote no tiene unidades sin vencer (la promoción no se ve en la tienda).
 
 ### POST /api/inventario/promociones
 
@@ -602,8 +611,10 @@ Veterinario, con CSRF. "Publicitar".
 **Pedido:**
 
 ```json
-{ "producto_id": 105, "porcentaje": 30, "hasta": "2026-12-10" }
+{ "producto_id": 105, "lote_id": 9, "porcentaje": 30, "hasta": "2026-12-10" }
 ```
+
+`lote_id` (26/11) es opcional: sin él, la promoción es del lote con stock que vence primero.
 
 **201 Created:** la promoción, con el formato de `GET /api/inventario/promociones`.
 
@@ -611,9 +622,11 @@ Veterinario, con CSRF. "Publicitar".
 
 - `400 { "error": "Datos inválidos", "campos": { … } }`:
   - `porcentaje`: "El descuento tiene que ser un número entero entre 5 y 90 (por ciento)";
-  - `hasta`: "Elegí hasta qué día dura la promoción", "La promoción no puede terminar antes de hoy", "La promoción puede durar como mucho 90 días (hasta el dd/mm/aaaa)" o "El producto vence el dd/mm/aaaa: la promoción no puede durar más que eso".
+  - `hasta`: "Elegí hasta qué día dura la promoción", "La promoción no puede terminar antes de hoy", "La promoción puede durar como mucho 90 días (hasta el dd/mm/aaaa)" o "El lote vence el dd/mm/aaaa: la promoción no puede durar más que eso";
+  - `lote_id`: "Ese lote no es de este producto".
 - `404 { "error": "Producto no encontrado" }`.
 - `409 { "error": "El producto no está a la venta (está dado de baja o vencido)" }`.
+- `409 { "error": "Ese lote no tiene unidades: la promoción no tendría nada para vender" }` o `"Ese lote está vencido: no se puede vender"`.
 - `409 { "error": "Este producto ya tiene una promoción del 30 % hasta el 10/12/2026. Terminala para publicar otra.", "promocion_id": 3 }`.
 
 ### DELETE /api/inventario/promociones/{id}

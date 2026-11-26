@@ -32,7 +32,8 @@ Endpoint de proceso a proceso, usado por Pacientes al finalizar una consulta. **
 Los tipos tienen que ser los correctos: un número como texto (`"2"`) o un decimal (`2.5`) se rechaza.
 
 **Qué hace:** todo o nada, en una sola transacción.
-- Resta el stock de cada ítem y registra un movimiento `SALIDA` con motivo `CONSULTA` por ítem. Los movimientos de insumo llevan solo `insumo_id`; los de producto, solo `producto_id`.
+- Resta el stock de cada ítem y registra un movimiento `SALIDA` con motivo `CONSULTA` por ítem. Los movimientos de insumo llevan solo `insumo_id`; los de producto, `producto_id` y su lote.
+- Un producto (26/11, migración 028) sale de sus lotes **sin vencer**, el que vence primero antes. Si hace falta más de un lote, el primero lleva el `id_operacion` del pedido y cada uno de los otros, `{id_operacion}-lote-{lote}`; un reintento suma todos. El `stock` de los faltantes es el que se puede usar (sin los lotes vencidos).
 - En los insumos también actualiza el estado: si el stock llega a 0, queda `EN_FALTA`; si no, `DISPONIBLE`. Un insumo marcado `YA_PEDIDO` queda así hasta que se le carga stock.
 - La fecha de los movimientos es la hora de Argentina, igual que en las cargas y retiros del veterinario (MySQL trabaja en UTC).
 - Antes de registrar nada comprueba que cada ítem exista: si alguno no existe, responde `404` y no descuenta nada.

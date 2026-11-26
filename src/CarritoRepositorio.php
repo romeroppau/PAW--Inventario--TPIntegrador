@@ -7,11 +7,13 @@
 //   columna calculada "abierto").
 // - El carrito muestra siempre el precio de HOY de cada producto, con la promoción vigente si tiene
 //   (Promocion::PRECIO_FINAL). La compra cobra ese mismo precio y lo guarda (CompraRepositorio::confirmar).
+// - El stock es el que se puede vender (sin los lotes vencidos), y el descuento de una promoción vale
+//   solo para las unidades que le quedan a su lote: las demás van a precio normal (migración 028).
 class CarritoRepositorio
 {
-    // Un producto está a la venta si está activo y no vencido (la misma regla que el catálogo,
-    // ProductoRepositorio::VISIBLE_EN_TIENDA).
-    private const A_LA_VENTA = 'p.activo = 1 AND (p.fecha_vencimiento IS NULL OR p.fecha_vencimiento >= CURDATE())';
+    // Un producto está a la venta si está activo y no tiene todo su stock vencido (la misma regla que
+    // el catálogo, ProductoRepositorio::VISIBLE_EN_TIENDA).
+    private const A_LA_VENTA = Lotes::A_LA_VENTA;
 
     // Hora de Argentina (-03:00) para creado_en y el CURDATE() de los vencimientos.
     public function __construct(private PDO $db)
@@ -39,7 +41,8 @@ class CarritoRepositorio
 
         $consulta = $this->db->prepare(
             'SELECT i.producto_id, p.nombre, ' . Promocion::PRECIO_FINAL . ' AS precio_unitario, p.precio AS precio_lista,
-                    pr.porcentaje AS promocion_porcentaje, i.cantidad, p.stock,
+                    pr.porcentaje AS promocion_porcentaje, lp.stock AS promocion_quedan, i.cantidad,
+                    ' . Lotes::STOCK_VENDIBLE . ' AS stock,
                     (' . self::A_LA_VENTA . ') AS a_la_venta, (p.imagen IS NOT NULL AND LENGTH(p.imagen) > 0) AS tiene_imagen
              FROM item_carrito i
              JOIN producto p ON p.id = i.producto_id
@@ -52,16 +55,24 @@ class CarritoRepositorio
         $items = [];
         $total = 0.0;
         foreach ($consulta->fetchAll() as $fila) {
-            $subtotal = round((float) $fila['precio_unitario'] * (int) $fila['cantidad'], 2);
+            $cantidad = (int) $fila['cantidad'];
+            $enPromocion = $fila['promocion_porcentaje'] !== null;
+            $conDescuento = Promocion::cantidadConDescuento($cantidad, $enPromocion ? (int) $fila['promocion_quedan'] : null);
+            $subtotal = Promocion::subtotal($cantidad, (float) $fila['precio_lista'], $conDescuento, (float) $fila['precio_unitario']);
             $total += $subtotal;
             $items[] = [
                 'producto_id' => (int) $fila['producto_id'],
                 'nombre' => $fila['nombre'],
+                // Con promoción, el precio con descuento (el de las unidades que entran en la promoción).
                 'precio_unitario' => (float) $fila['precio_unitario'],
                 // Con promoción: el precio sin descuento y el porcentaje (si no, null y null).
-                'precio_sin_descuento' => $fila['promocion_porcentaje'] === null ? null : (float) $fila['precio_lista'],
-                'descuento' => $fila['promocion_porcentaje'] === null ? null : (int) $fila['promocion_porcentaje'],
-                'cantidad' => (int) $fila['cantidad'],
+                'precio_sin_descuento' => $enPromocion ? (float) $fila['precio_lista'] : null,
+                'descuento' => $enPromocion ? (int) $fila['promocion_porcentaje'] : null,
+                // Con promoción (028): cuántas unidades le quedan al lote y cuántas de estas van con
+                // descuento; las demás (cantidad - cantidad_promocion) van a precio_sin_descuento.
+                'promocion_quedan' => $enPromocion ? (int) $fila['promocion_quedan'] : null,
+                'cantidad_promocion' => $conDescuento,
+                'cantidad' => $cantidad,
                 'subtotal' => $subtotal,
                 'stock' => (int) $fila['stock'],
                 'a_la_venta' => (bool) $fila['a_la_venta'],
@@ -155,7 +166,7 @@ class CarritoRepositorio
     private function productoALaVenta(int $productoId): ?array
     {
         $consulta = $this->db->prepare(
-            'SELECT ' . Promocion::PRECIO_FINAL . ' AS precio, p.stock FROM producto p ' . Promocion::JOIN_VIGENTE
+            'SELECT ' . Promocion::PRECIO_FINAL . ' AS precio, ' . Lotes::STOCK_VENDIBLE . ' AS stock FROM producto p ' . Promocion::JOIN_VIGENTE
             . ' WHERE p.id = ? AND ' . self::A_LA_VENTA
         );
         $consulta->execute([$productoId]);
