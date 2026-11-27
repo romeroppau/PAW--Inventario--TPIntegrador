@@ -392,6 +392,7 @@ Historial de movimientos de un insumo, del más reciente al más antiguo.
   | `ENTRADA` | `CARGA_VETERINARIO` | Carga de stock | Alta con stock inicial o carga de stock |
   | `SALIDA` | `CONSULTA` | Usado en una consulta | Al finalizar una consulta |
   | `SALIDA` | `AJUSTE` | Retiro manual (sin consulta) | Retiro manual |
+  | `SALIDA` | `VENCIMIENTO` | Baja por vencimiento | La tarea diaria da de baja un lote vencido (27/11, `contrato.md`, "POST /api/inventario/tareas/vencer-lotes"). Sin usuario |
 
 - `insumo_id` e `insumo`: id y nombre del insumo del movimiento (sirven en la lista de todos los insumos).
 - `usuario`: nombre de quien registró el movimiento, o `null` si no lo registró una persona.

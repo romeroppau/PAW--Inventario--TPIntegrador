@@ -6,6 +6,10 @@
 // Las clases (InsumoControlador, etc.) las carga solo el autoload de index.php.
 
 $router->get('/api/inventario/insumos', [InsumoControlador::class, 'listado']);
+
+// La baja diaria de los lotes vencidos, de productos y de insumos (la llama el motor diario, con el
+// token de tareas). Contrato en docs/api/contrato.md, "POST /api/inventario/tareas/vencer-lotes".
+$router->post('/api/inventario/tareas/vencer-lotes', [TareaControlador::class, 'vencerLotes']);
 $router->post('/api/inventario/insumos', [InsumoControlador::class, 'crear']);
 
 // Va ANTES de las rutas con {id}: el router prueba las rutas en orden, y si /{id} estuviera
