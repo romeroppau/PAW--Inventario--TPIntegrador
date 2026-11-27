@@ -80,7 +80,7 @@ Desde la migración 028 (26/11) el stock de un producto está en **lotes**, cada
 - **`vence`** (029): si el producto vence, cada lote nuevo lleva su vencimiento; si no vence (por ejemplo, un accesorio), ningún lote lo lleva, su stock va a un único lote sin vencimiento y la pantalla no muestra lotes. Se cambia solo con el stock en 0.
 - `lotes` trae los que tienen stock y los vacíos que no vencieron y siguen la regla de `vence` (se les puede cargar stock), el que vence primero arriba (los que no vencen, al final).
 - **Se vende y se usa en las consultas lo que no está vencido, empezando por el lote que vence primero.** Si una venta o una consulta necesita más de lo que tiene ese lote, sigue con el siguiente. Una venta cancelada devuelve cada unidad al lote del que salió.
-- Un lote vencido con stock (`vencido: true`) no se vende: queda para retirarlo, y Reportes lo avisa. Un producto con **todo** su stock vencido no se ve en la tienda (como antes un producto vencido); sin stock, se ve como "sin stock".
+- Un lote vencido con stock (`vencido: true`) no se vende. Al día siguiente de vencer, la tarea diaria lo da de baja (ver `POST /api/inventario/tareas/vencer-lotes`): hasta entonces queda para retirarlo, y Reportes lo avisa. Un producto con **todo** su stock vencido no se ve en la tienda (como antes un producto vencido); sin stock, se ve como "sin stock".
 - Los movimientos dicen de qué lote fueron (`lote`).
 - Una promoción es de un lote, y el descuento vale para las unidades que le quedan a ese lote (`contrato-tienda.md`, "Promociones").
 
@@ -437,6 +437,22 @@ Historial de movimientos de un producto, del más reciente al más antiguo.
 - `consulta_id` y `compra` (Entrega 5): de dónde salió el movimiento, para enlazarlo. `consulta_id` es la consulta en la que se usó (motivo `CONSULTA`); `compra`, el número de la compra de la tienda (`V-000123`, motivos `VENTA` y `VENTA_CANCELADA`). Si no corresponde, `null`. Salen del `id_operacion` del movimiento (`src/ReferenciaMovimiento.php`).
 
 **Errores:** `400 { "error": "Datos inválidos", "campos": { "desde": "..." } }` si una fecha no tiene el formato `AAAA-MM-DD` o `desde` es posterior a `hasta`.
+
+---
+
+## POST /api/inventario/tareas/vencer-lotes
+
+(27/11) La baja diaria de los lotes vencidos, **de productos y de insumos**. La llama el motor diario (GitHub Actions, `motor-diario.yml` del ApiGateway) con el header `X-Tarea-Token` (el secret `TAREAS_TOKEN`, el mismo de `/api/tienda/tareas/vencer`). Sin token válido: `401`.
+
+Por cada lote vencido (su vencimiento es anterior a hoy, en hora de Argentina) que todavía tiene stock:
+
+- el lote queda en 0 y el stock del producto o insumo baja (y su próximo vencimiento se recalcula);
+- queda un movimiento `SALIDA` con motivo **`VENCIMIENTO`** (migración 031) por todo lo que tenía el lote, sin usuario (`usuario: null`; la pantalla dice "Tarea diaria") y con `id_operacion` `vencimiento-producto-{lote}` o `vencimiento-insumo-{lote}`;
+- cada veterinaria recibe un aviso por la campana (tipo `STOCK_BAJO`): "Dimos de baja el lote L2 (FL-2612) del producto Vacuna X: 8 unidades vencieron el 25/11/2026. Stock actual: 12. Lo ves en Movimientos."
+
+Lo que vence hoy todavía se usa: se da de baja mañana. Cada lote va en su propia transacción; si la tarea corre dos veces, la segunda no encuentra nada. Los avisos de los últimos dos días se reintentan en cada corrida (Backend no repite un aviso con el mismo `id_operacion`).
+
+**200 OK:** `{ "lotes_productos": 1, "lotes_insumos": 2, "unidades": 15, "avisos": 3 }`
 
 ---
 
