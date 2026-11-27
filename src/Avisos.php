@@ -15,7 +15,8 @@ class Avisos
     // Devuelve true si el aviso es nuevo, false si ya se había mandado, o null si Backend no lo
     // recibió (falta el token, no respondió o lo rechazó). Los errores quedan en el log.
     // $canales: 'web' y/o 'whatsapp' (por defecto, los dos).
-    public static function mandar(int $usuarioId, string $mensaje, string $idOperacion, DateTimeImmutable $ahora, array $canales = ['web', 'whatsapp']): ?bool
+    // $tipo: el de la notificación en Backend (por defecto COMPRA; la baja por vencimiento usa STOCK_BAJO).
+    public static function mandar(int $usuarioId, string $mensaje, string $idOperacion, DateTimeImmutable $ahora, array $canales = ['web', 'whatsapp'], string $tipo = 'COMPRA'): ?bool
     {
         $token = Config::get('INTERNAL_TOKEN');
         if (!is_string($token) || $token === '') {
@@ -27,7 +28,7 @@ class Avisos
         foreach (array_intersect_key(self::CANALES, array_flip($canales)) as $sufijo => $canal) {
             $resultado = self::llamar($token, [
                 'usuario_id' => $usuarioId,
-                'tipo' => 'COMPRA',
+                'tipo' => $tipo,
                 'canal' => $canal,
                 'mensaje' => $mensaje,
                 'fecha_programada' => $ahora->format('Y-m-d H:i:s'),
